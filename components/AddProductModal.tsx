@@ -1,31 +1,61 @@
 'use client'
 import { useState } from 'react'
-import { X, Plus } from 'lucide-react'
+import { X, Plus, Loader } from 'lucide-react'
 
 interface Props { onAdded: () => void }
 
+type Phase = 'idle' | 'saving' | 'scraping'
+
 export function AddProductModal({ onAdded }: Props) {
   const [open, setOpen]     = useState(false)
-  const [loading, setLoad]  = useState(false)
+  const [phase, setPhase]   = useState<Phase>('idle')
   const [url, setUrl]       = useState('')
   const [target, setTarget] = useState('')
   const [size, setSize]     = useState('')
   const [notes, setNotes]   = useState('')
   const [priority, setPrio] = useState('1')
+  const [error, setError]   = useState('')
+
+  function close() {
+    setOpen(false); setUrl(''); setTarget(''); setSize('')
+    setNotes(''); setPrio('1'); setError(''); setPhase('idle')
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
-    setLoad(true)
+    setError('')
+    setPhase('saving')
     try {
-      await fetch('/api/products', {
+      const r = await fetch('/api/products', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, target_price: target ? +target : null, size, notes, priority: +priority }),
       })
-      setOpen(false); setUrl(''); setTarget(''); setSize(''); setNotes('')
+      const product = await r.json()
+      if (!r.ok || product.error) throw new Error(product.error || 'Помилка збереження')
+
+      setPhase('scraping')
+      // auto-scrape: fetch price, name, image
+      await fetch('/api/scrape/product', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId: product.id }),
+      })
+
       onAdded()
-    } finally { setLoad(false) }
+      close()
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
+      setPhase('idle')
+    }
   }
+
+  const loading = phase !== 'idle'
+  const btnLabel = phase === 'saving'
+    ? <><Loader size={14} className="animate-spin" /> Зберігаємо...</>
+    : phase === 'scraping'
+    ? <><Loader size={14} className="animate-spin" /> Завантажуємо з сайту...</>
+    : 'Додати товар'
 
   return (
     <>
@@ -39,7 +69,7 @@ export function AddProductModal({ onAdded }: Props) {
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold">Додати товар</h2>
-              <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+              <button onClick={close} disabled={loading} className="text-gray-400 hover:text-gray-600 disabled:opacity-40"><X size={20} /></button>
             </div>
             <form onSubmit={submit} className="space-y-4">
               <div>
@@ -73,9 +103,10 @@ export function AddProductModal({ onAdded }: Props) {
                   <option value="3">🔥 Терміново</option>
                 </select>
               </div>
+              {error && <p className="text-sm text-red-500">{error}</p>}
               <button type="submit" disabled={loading}
-                className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white py-2 rounded-xl font-medium text-sm transition-colors">
-                {loading ? 'Додаємо...' : 'Додати товар'}
+                className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white py-2 rounded-xl font-medium text-sm transition-colors">
+                {btnLabel}
               </button>
             </form>
           </div>

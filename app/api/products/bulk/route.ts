@@ -28,5 +28,5 @@ export async function POST(req: Request) {
     .select('id')
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ added: data?.length ?? 0 })
+  return NextResponse.json({ added: data?.length ?? 0, ids: data?.map(r => r.id) ?? [] })
 }

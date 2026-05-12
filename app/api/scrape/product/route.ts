@@ -35,32 +35,48 @@ export async function POST(req: Request) {
 
     const html = await fetchPage(product.url)
 
-    // Send a relevant chunk of HTML to LLM (cap at ~8000 chars around price signals)
-    const trimmed = html.replace(/<script[\s\S]*?<\/script>/gi, '')
-                        .replace(/<style[\s\S]*?<\/style>/gi, '')
-                        .replace(/\s{2,}/g, ' ')
-                        .slice(0, 12000)
+    // Extract image tags and og:image for LLM context
+    const ogImage = html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i)?.[1] || null
+
+    const trimmed = html
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/\s{2,}/g, ' ')
+      .slice(0, 12000)
 
     const msg = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 512,
+      max_tokens: 768,
       messages: [{
         role: 'user',
-        content: `Extract the product price from this HTML page (URL: ${product.url}).
+        content: `Extract product details from this HTML page (URL: ${product.url}).
+${ogImage ? `The og:image meta tag value is: ${ogImage}` : ''}
+
 Return ONLY a JSON object, no explanation:
-{"price": 99.99, "original_price": 129.99, "currency": "USD", "in_stock": true, "name": "Product Name"}
-- price: current/sale price as number
-- original_price: crossed-out/was price, or null
-- currency: 3-letter code
-- in_stock: true if available to buy
-- name: product name if visible, or null
+{"price": 99.99, "original_price": 129.99, "currency": "USD", "in_stock": true, "name": "Product Name", "image_url": "https://..."}
+
+Rules:
+- price: current/sale price as number (required)
+- original_price: crossed-out/was price as number, or null
+- currency: 3-letter code (USD, EUR, GBP, etc.)
+- in_stock: true if can be added to cart / available
+- name: full product name, or null if not found
+- image_url: main product image URL (prefer og:image if provided, else largest product image src), or null
 
 HTML:
 ${trimmed}`,
       }],
     })
 
-    let parsed: { price: number; original_price?: number | null; currency?: string; in_stock?: boolean; name?: string | null } | null = null
+    let parsed: {
+      price: number
+      original_price?: number | null
+      currency?: string
+      in_stock?: boolean
+      name?: string | null
+      image_url?: string | null
+    } | null = null
+
     try {
       const raw = msg.content[0].type === 'text' ? msg.content[0].text : ''
       const match = raw.match(/\{[\s\S]*\}/)
@@ -76,7 +92,6 @@ ${trimmed}`,
     const currency = parsed.currency || product.currency || 'USD'
     const now = new Date().toISOString()
 
-    // Insert price check record
     await supabase.from('price_checks').insert({
       product_id: product.id,
       price: parsed.price,
@@ -87,7 +102,6 @@ ${trimmed}`,
       parser_strategy: 'llm_adhoc',
     })
 
-    // Update product current price
     const updateFields: Record<string, unknown> = {
       current_price: parsed.price,
       original_price: parsed.original_price ?? null,
@@ -96,10 +110,18 @@ ${trimmed}`,
       last_checked: now,
     }
     if (parsed.name && !product.name) updateFields.name = parsed.name
+    if (parsed.image_url) updateFields.image_url = parsed.image_url
+    else if (ogImage) updateFields.image_url = ogImage
 
     await supabase.from('products').update(updateFields).eq('id', product.id)
 
-    return NextResponse.json({ price: parsed.price, currency, in_stock: parsed.in_stock ?? true })
+    return NextResponse.json({
+      price: parsed.price,
+      currency,
+      in_stock: parsed.in_stock ?? true,
+      name: parsed.name ?? null,
+      image_url: updateFields.image_url ?? null,
+    })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     return NextResponse.json({ error: msg }, { status: 500 })

@@ -16,15 +16,18 @@ export function BulkImportModal({ onAdded }: Props) {
   const [loading, setLoad]   = useState(false)
   const [error,   setError]  = useState('')
   const [result,  setResult] = useState<{ added: number } | null>(null)
+  const [scraping, setScraping] = useState(false)
+  const [scraped,  setScraped]  = useState(0)
+  const [scrapeTotal, setScrapeTotal] = useState(0)
 
   function reset() {
     setStep(1); setUrl(''); setTarget(''); setSize('')
     setItems([]); setError(''); setResult(null)
+    setScraping(false); setScraped(0); setScrapeTotal(0)
   }
 
   function close() { setOpen(false); reset() }
 
-  // Step 1 → 2: fetch and parse category page
   async function scanPage() {
     setLoad(true); setError('')
     try {
@@ -45,7 +48,6 @@ export function BulkImportModal({ onAdded }: Props) {
     }
   }
 
-  // Step 2 → 3: bulk insert selected
   async function importSelected() {
     const selected = items.filter(i => i.selected)
     if (!selected.length) { setError('Оберіть хоча б один товар'); return }
@@ -68,9 +70,27 @@ export function BulkImportModal({ onAdded }: Props) {
       setResult(data)
       setStep(3)
       onAdded()
+      setLoad(false)
+
+      // Scrape prices for all added products (sequentially to avoid rate limits)
+      const ids: string[] = data.ids ?? []
+      if (ids.length > 0) {
+        setScraping(true)
+        setScrapeTotal(ids.length)
+        setScraped(0)
+        for (const id of ids) {
+          await fetch('/api/scrape/product', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ productId: id }),
+          })
+          setScraped(prev => prev + 1)
+        }
+        setScraping(false)
+        onAdded()
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e))
-    } finally {
       setLoad(false)
     }
   }
@@ -185,10 +205,26 @@ export function BulkImportModal({ onAdded }: Props) {
                     <Check size={32} className="text-green-500" />
                   </div>
                   <h3 className="text-xl font-bold mb-2">Імпорт завершено!</h3>
-                  <p className="text-gray-500 text-sm">
+                  <p className="text-gray-500 text-sm mb-4">
                     Додано <b>{result?.added}</b> нових товарів до списку.
-                    <br />Ціни будуть перевірені при наступному запуску скрапера.
                   </p>
+                  {scraping && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-center gap-2 text-sm text-blue-600">
+                        <Loader size={14} className="animate-spin" />
+                        Завантажуємо ціни та фото... {scraped}/{scrapeTotal}
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-1.5 mx-auto max-w-xs">
+                        <div
+                          className="bg-blue-500 h-1.5 rounded-full transition-all duration-300"
+                          style={{ width: `${scrapeTotal ? (scraped / scrapeTotal) * 100 : 0}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {!scraping && scrapeTotal > 0 && (
+                    <p className="text-xs text-gray-400">Ціни та фото завантажені ✓</p>
+                  )}
                 </div>
               )}
             </div>
@@ -217,9 +253,9 @@ export function BulkImportModal({ onAdded }: Props) {
                 </>
               )}
               {step === 3 && (
-                <button onClick={close}
-                  className="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-xl text-sm font-medium transition-colors">
-                  Готово
+                <button onClick={close} disabled={scraping}
+                  className="bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white px-5 py-2 rounded-xl text-sm font-medium transition-colors">
+                  {scraping ? 'Зачекайте...' : 'Готово'}
                 </button>
               )}
             </div>

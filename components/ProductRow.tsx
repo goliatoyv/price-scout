@@ -5,6 +5,7 @@ import { Product, ProductStatus, STATUS_META, ALL_STATUSES } from '@/lib/types'
 import { fmt, pctToTarget, timeAgo } from '@/lib/utils'
 import { StatusBadge } from './StatusBadge'
 import { PriceSparkline } from './PriceSparkline'
+import { EditProductModal } from './EditProductModal'
 
 interface Props { product: Product; onUpdate: () => void }
 
@@ -96,6 +97,7 @@ export function ProductRow({ product: p, onUpdate }: Props) {
             className="text-gray-400 hover:text-blue-500 p-1 rounded transition-colors">
             <ExternalLink size={14} />
           </a>
+          <EditProductModal product={p} onUpdated={onUpdate} />
           <button onClick={deleteProduct} className="text-gray-400 hover:text-red-500 p-1 rounded transition-colors">
             <Trash2 size={14} />
           </button>

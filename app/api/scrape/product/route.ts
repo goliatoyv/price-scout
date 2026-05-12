@@ -1,288 +1,114 @@
 import { NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
-import { supabase } from '@/lib/supabase'
+import { supabase, supabaseAdmin } from '@/lib/supabase'
+import { runPipeline } from '@/lib/scraper/pipeline'
 
-export const dynamic = 'force-dynamic'
+export const dynamic     = 'force-dynamic'
 export const maxDuration = 60
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-
-// ─── Types ───────────────────────────────────────────────────────────────────
-
-interface ProductData {
-  price:          number
-  original_price: number | null
-  currency:       string
-  in_stock:       boolean
-  name:           string | null
-  image_url:      string | null
+interface ProductRow {
+  id:        string
+  url:       string
+  name:      string | null
+  image_url: string | null
+  currency:  string | null
 }
 
-interface SiteStrategy {
-  strategy: 'json_ld' | 'og_meta' | 'llm'
-  needs_js: boolean
+function unauthorized(req: Request): boolean {
+  const required = process.env.SCRAPE_AUTH_TOKEN
+  if (!required) return false  // auth disabled if env var not set
+  const got = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '')
+  return got !== required
 }
-
-// ─── HTTP fetch ───────────────────────────────────────────────────────────────
-
-async function fetchPage(url: string, render = false): Promise<string> {
-  const key = process.env.SCRAPER_API_KEY
-  let fetchUrl = url
-  if (key) {
-    const params = new URLSearchParams({ api_key: key, url })
-    if (render) params.set('render', 'true')
-    fetchUrl = `http://api.scraperapi.com?${params}`
-  }
-  const r = await fetch(fetchUrl, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36' },
-    signal: AbortSignal.timeout(40000),
-  })
-  if (!r.ok) throw new Error(`HTTP ${r.status}`)
-  return r.text()
-}
-
-// ─── Extraction methods ───────────────────────────────────────────────────────
-
-function extractFromProduct(obj: Record<string, unknown>, result: Partial<ProductData>) {
-  if (typeof obj.name === 'string' && !result.name) result.name = obj.name
-  const img = obj.image
-  if (!result.image_url) {
-    if (typeof img === 'string') result.image_url = img
-    else if (Array.isArray(img) && typeof img[0] === 'string') result.image_url = img[0]
-    else if (img && typeof img === 'object' && 'url' in (img as object))
-      result.image_url = (img as Record<string, string>).url
-  }
-  const offers = obj.offers as Record<string, unknown> | undefined
-  if (offers && result.price == null) {
-    const offerList = Array.isArray(offers) ? offers : [offers]
-    const first = offerList[0] as Record<string, unknown>
-    if (first?.price != null) {
-      result.price = parseFloat(String(first.price))
-      result.currency = typeof first.priceCurrency === 'string' ? first.priceCurrency : 'USD'
-      result.in_stock = String(first.availability ?? '').toLowerCase().includes('instock')
-    }
-  }
-}
-
-function extractJsonLd(html: string): Partial<ProductData> {
-  const result: Partial<ProductData> = {}
-  const blocks = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)]
-  for (const block of blocks) {
-    try {
-      const json = JSON.parse(block[1])
-      const items: unknown[] = Array.isArray(json) ? json : [json]
-      for (const item of items) {
-        const obj = item as Record<string, unknown>
-        const type = obj['@type']
-
-        if (type === 'Product') {
-          extractFromProduct(obj, result)
-        } else if (type === 'ProductGroup') {
-          // Nike pattern: ProductGroup → hasVariant[] → Product with offers
-          if (typeof obj.name === 'string' && !result.name) result.name = obj.name
-          const variants = obj.hasVariant as Record<string, unknown>[] | undefined
-          if (Array.isArray(variants) && variants.length > 0) {
-            // Take first variant that has an offer with a price
-            for (const v of variants) {
-              if (result.price != null) break
-              extractFromProduct(v as Record<string, unknown>, result)
-            }
-          }
-        }
-      }
-    } catch { /* skip */ }
-  }
-  return result
-}
-
-function extractMeta(html: string): Partial<ProductData> {
-  const result: Partial<ProductData> = {}
-  const og = (prop: string) =>
-    html.match(new RegExp(`<meta[^>]+property=["']${prop}["'][^>]+content=["']([^"']+)["']`, 'i'))?.[1] ||
-    html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${prop}["']`, 'i'))?.[1]
-  const image = og('og:image')
-  if (image) result.image_url = image
-  const priceStr = og('product:price:amount') || og('og:price:amount')
-  if (priceStr) result.price = parseFloat(priceStr)
-  const curr = og('product:price:currency') || og('og:price:currency')
-  if (curr) result.currency = curr
-  const title = og('og:title')
-  if (title) result.name = title.replace(/\s*[-|].*$/, '').trim()
-  return result
-}
-
-async function extractWithLlm(html: string, url: string): Promise<Partial<ProductData>> {
-  const trimmed = html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/\s{2,}/g, ' ')
-    .slice(0, 12000)
-
-  const msg = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 512,
-    messages: [{
-      role: 'user',
-      content: `Extract product details from this HTML (URL: ${url}).
-Return ONLY JSON: {"price":99.99,"original_price":129.99,"currency":"USD","in_stock":true,"name":"Product Name","image_url":"https://..."}
-- price: current/sale price as number (required)
-- original_price: crossed-out price or null
-- currency: 3-letter ISO
-- in_stock: true if purchasable
-- name: product title or null
-- image_url: main product image URL or null
-HTML:\n${trimmed}`,
-    }],
-  })
-  try {
-    const raw = msg.content[0].type === 'text' ? msg.content[0].text : ''
-    const m = raw.match(/\{[\s\S]*\}/)
-    if (m) return JSON.parse(m[0])
-  } catch { /* ignore */ }
-  return {}
-}
-
-// ─── DB helpers ───────────────────────────────────────────────────────────────
-
-async function loadStrategy(domain: string): Promise<SiteStrategy | null> {
-  const { data } = await supabase
-    .from('site_parsers')
-    .select('selectors, needs_js')
-    .eq('domain', domain)
-    .single()
-  if (!data?.selectors) return null
-  const sel = data.selectors as Record<string, unknown>
-  return {
-    strategy: (sel.strategy as SiteStrategy['strategy']) ?? 'llm',
-    needs_js: data.needs_js ?? false,
-  }
-}
-
-async function saveStrategy(domain: string, strategy: SiteStrategy['strategy'], needsJs: boolean) {
-  await supabase.from('site_parsers').upsert(
-    { domain, selectors: { strategy }, needs_js: needsJs, last_verified: new Date().toISOString() },
-    { onConflict: 'domain' },
-  )
-}
-
-// ─── Main handler ─────────────────────────────────────────────────────────────
 
 export async function POST(req: Request) {
-  try {
-    const { productId } = await req.json()
-    if (!productId) return NextResponse.json({ error: 'productId required' }, { status: 400 })
-
-    const { data: product, error: fetchErr } = await supabase
-      .from('products_with_price')
-      .select('id, url, name, currency')
-      .eq('id', productId)
-      .single()
-
-    if (fetchErr || !product) return NextResponse.json({ error: 'Product not found' }, { status: 404 })
-
-    const domain    = new URL(product.url).hostname.replace('www.', '')
-    const saved     = await loadStrategy(domain)
-    const isNewSite = !saved
-    const needsJs   = saved?.needs_js ?? false
-
-    // Fetch HTML — auto-retry with JS render on 403/block
-    let html: string | null = null
-    let usedJs = needsJs
-    let usedStrategy: SiteStrategy['strategy'] | null = null
-    let data: Partial<ProductData> = {}
-
-    try {
-      html = await fetchPage(product.url, needsJs)
-    } catch {
-      html = null
-    }
-
-    // Got blocked or no content → try JS render
-    if ((!html || html.length < 500) && process.env.SCRAPER_API_KEY) {
-      try {
-        html   = await fetchPage(product.url, true)
-        usedJs = true
-      } catch {
-        html = null
-      }
-    }
-
-    if (!html) return NextResponse.json({ error: 'Could not fetch product page' }, { status: 502 })
-
-    // Try JSON-LD + OG meta first
-    const structured = { ...extractMeta(html), ...extractJsonLd(html) }
-    if (structured.price != null) {
-      data = structured
-      usedStrategy = Object.keys(extractJsonLd(html)).length > 0 ? 'json_ld' : 'og_meta'
-    }
-
-    // No price yet → try JS render if not done already
-    if (data.price == null && !usedJs && process.env.SCRAPER_API_KEY) {
-      try {
-        html   = await fetchPage(product.url, true)
-        usedJs = true
-        const rendered = { ...extractMeta(html), ...extractJsonLd(html) }
-        if (rendered.price != null) {
-          data = rendered
-          usedStrategy = Object.keys(extractJsonLd(html)).length > 0 ? 'json_ld' : 'og_meta'
-        }
-      } catch { /* continue to LLM */ }
-    }
-
-    // Still no price → LLM
-    if (data.price == null) {
-      const llm = await extractWithLlm(html, product.url)
-      if (llm.price != null) {
-        data = { ...data, ...llm }
-        usedStrategy = 'llm'
-      }
-    }
-
-    if (data.price == null) {
-      return NextResponse.json({ error: 'Could not extract price from page' }, { status: 422 })
-    }
-
-    // Save strategy for new sites
-    if (isNewSite && usedStrategy) {
-      await saveStrategy(domain, usedStrategy, usedJs)
-    }
-
-    const currency = (data.currency || product.currency || 'USD').trim().slice(0, 3)
-    const now = new Date().toISOString()
-
-    await supabase.from('price_checks').insert({
-      product_id:      product.id,
-      price:           data.price,
-      original_price:  data.original_price ?? null,
-      currency,
-      in_stock:        data.in_stock ?? true,
-      checked_at:      now,
-      parser_strategy: usedStrategy ?? 'unknown',
-    })
-
-    const updateFields: Record<string, unknown> = {
-      current_price:  data.price,
-      original_price: data.original_price ?? null,
-      currency,
-      in_stock:       data.in_stock ?? true,
-      last_checked:   now,
-    }
-    if (data.name      && !product.name) updateFields.name      = data.name
-    if (data.image_url)                  updateFields.image_url = data.image_url
-
-    await supabase.from('products').update(updateFields).eq('id', product.id)
-
-    return NextResponse.json({
-      price:        data.price,
-      currency,
-      in_stock:     data.in_stock ?? true,
-      name:         data.name ?? null,
-      image_url:    data.image_url ?? null,
-      site_learned: isNewSite && !!usedStrategy,
-      strategy:     usedStrategy,
-    })
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e)
-    return NextResponse.json({ error: msg }, { status: 500 })
+  if (unauthorized(req)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  let productId: string | undefined
+  try {
+    const body = await req.json()
+    productId = body?.productId
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+  }
+  if (!productId) {
+    return NextResponse.json({ error: 'productId required' }, { status: 400 })
+  }
+
+  // Read via RLS-safe view (anon).
+  const { data: product, error: readErr } = await supabase
+    .from('products_with_price')
+    .select('id, url, name, image_url, currency')
+    .eq('id', productId)
+    .maybeSingle<ProductRow>()
+
+  if (readErr || !product) {
+    return NextResponse.json({ error: 'Product not found' }, { status: 404 })
+  }
+
+  let outcome
+  try {
+    outcome = await runPipeline(product.url)
+  } catch (e) {
+    console.error('[scrape] pipeline failed', { productId, url: product.url, error: e })
+    const msg = e instanceof Error ? e.message : 'scrape failed'
+    // Surface only safe, expected messages — anything else is internal.
+    const safe =
+      msg === 'Could not fetch product page' ||
+      msg === 'Could not extract price from page' ||
+      msg === 'Invalid URL' ||
+      msg === 'Only http(s) URLs are allowed' ||
+      msg === 'Internal hosts are not allowed'
+        ? msg
+        : 'Scrape failed'
+    return NextResponse.json({ error: safe }, { status: 502 })
+  }
+
+  const { data, strategy, usedJs, siteLearned } = outcome
+  const currency = (data.currency || product.currency || 'USD').trim().slice(0, 3)
+  const now = new Date().toISOString()
+
+  // Insert price history — preserve null for unknown in_stock instead of defaulting to true.
+  const { error: insErr } = await supabaseAdmin.from('price_checks').insert({
+    product_id:      product.id,
+    price:           data.price,
+    original_price:  data.original_price ?? null,
+    currency,
+    in_stock:        data.in_stock ?? null,
+    checked_at:      now,
+    parser_strategy: strategy,
+  })
+  if (insErr) {
+    console.error('[scrape] price_checks insert failed', insErr)
+    return NextResponse.json({ error: 'Persist failed' }, { status: 500 })
+  }
+
+  // products_with_price view derives price/currency/in_stock/last_checked from the
+  // latest price_checks row, so we only mutate products for metadata fields.
+  const updateFields: Record<string, unknown> = {}
+  if (data.name      && !product.name)      updateFields.name      = data.name
+  if (data.image_url && !product.image_url) updateFields.image_url = data.image_url
+
+  if (Object.keys(updateFields).length > 0) {
+    const { error: updErr } = await supabaseAdmin
+      .from('products')
+      .update(updateFields)
+      .eq('id', product.id)
+    if (updErr) {
+      console.error('[scrape] products update failed', updErr)
+      return NextResponse.json({ error: 'Persist failed' }, { status: 500 })
+    }
+  }
+
+  return NextResponse.json({
+    price:        data.price,
+    currency,
+    in_stock:     data.in_stock ?? null,
+    name:         data.name ?? null,
+    image_url:    data.image_url ?? null,
+    strategy,
+    rendered:     usedJs,
+    site_learned: siteLearned,
+  })
 }

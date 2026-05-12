@@ -50,9 +50,9 @@ export function WatchList({ products, onUpdate }: Props) {
   }
 
   const headers: { key: SortKey; label: string }[] = [
-    { key: 'name',          label: 'Product'      },
-    { key: 'current_price', label: 'Price'        },
-    { key: 'target_price',  label: 'Target'       },
+    { key: 'name',          label: 'Товар'        },
+    { key: 'current_price', label: 'Ціна'         },
+    { key: 'target_price',  label: 'Ціль'         },
   ]
 
   return (
@@ -61,17 +61,17 @@ export function WatchList({ products, onUpdate }: Props) {
       <div className="p-4 border-b border-gray-100 flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-48">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search..."
+          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Пошук..."
             className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </div>
         <select value={filterStat} onChange={e => setFStat(e.target.value as ProductStatus | '')}
           className="text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
-          <option value="">All statuses</option>
+          <option value="">Всі статуси</option>
           {ALL_STATUSES.map(s => <option key={s} value={s}>{STATUS_META[s].label}</option>)}
         </select>
         <select value={filterSite} onChange={e => setFSite(e.target.value)}
           className="text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
-          <option value="">All sites</option>
+          <option value="">Всі сайти</option>
           {sites.map(s => <option key={s!} value={s!}>{s}</option>)}
         </select>
       </div>
@@ -88,11 +88,11 @@ export function WatchList({ products, onUpdate }: Props) {
                   <span className="flex items-center gap-1">{h.label} <SortIcon k={h.key} /></span>
                 </th>
               ))}
-              <th className="py-3 px-2">% to Target</th>
-              <th className="py-3 px-2">Trend</th>
-              <th className="py-3 px-2">Status</th>
+              <th className="py-3 px-2">% до цілі</th>
+              <th className="py-3 px-2">Тренд</th>
+              <th className="py-3 px-2">Статус</th>
               <th className="py-3 px-2 cursor-pointer hover:text-gray-700 select-none" onClick={() => toggleSort('last_checked')}>
-                <span className="flex items-center gap-1">Checked <SortIcon k="last_checked" /></span>
+                <span className="flex items-center gap-1">Перевірено <SortIcon k="last_checked" /></span>
               </th>
               <th className="py-3 pl-2 pr-4"></th>
             </tr>
@@ -100,7 +100,7 @@ export function WatchList({ products, onUpdate }: Props) {
           <tbody>
             {filtered.length === 0 ? (
               <tr><td colSpan={9} className="py-16 text-center text-gray-400 text-sm">
-                {products.length === 0 ? 'No products yet. Add your first one!' : 'No results found.'}
+                {products.length === 0 ? 'Список порожній. Додайте перший товар!' : 'Нічого не знайдено.'}
               </td></tr>
             ) : (
               filtered.map(p => <ProductRow key={p.id} product={p} onUpdate={onUpdate} />)
@@ -110,7 +110,7 @@ export function WatchList({ products, onUpdate }: Props) {
       </div>
 
       <div className="px-4 py-3 border-t border-gray-100 text-xs text-gray-400">
-        {filtered.length} of {products.length} items
+        {filtered.length} з {products.length} позицій
       </div>
     </div>
   )

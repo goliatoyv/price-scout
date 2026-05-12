@@ -22,7 +22,7 @@ export function ProductRow({ product: p, onUpdate }: Props) {
   }
 
   async function deleteProduct() {
-    if (!confirm('Remove this product?')) return
+    if (!confirm('Видалити цей товар?')) return
     await fetch(`/api/products/${p.id}`, { method: 'DELETE' })
     onUpdate()
   }
@@ -45,7 +45,7 @@ export function ProductRow({ product: p, onUpdate }: Props) {
       <td className="py-3 px-2 max-w-[220px]">
         <div className="font-medium text-sm line-clamp-2">{p.name || '—'}</div>
         <div className="text-xs text-gray-400 mt-0.5">{p.site_domain}</div>
-        {p.size && <div className="text-xs text-gray-500 mt-0.5">Size: {p.size}</div>}
+        {p.size && <div className="text-xs text-gray-500 mt-0.5">Розмір: {p.size}</div>}
         {p.priority === 3 && <span className="text-xs">🔥</span>}
       </td>
 

@@ -12,10 +12,10 @@ export function StatsBar({ products }: { products: Product[] }) {
   const sites = new Set(products.map(p => p.site_domain).filter(Boolean)).size
 
   const cards = [
-    { label: 'Total items',      value: total,        color: 'text-gray-900' },
-    { label: 'Below target 🎯',  value: belowTarget,  color: 'text-green-600' },
-    { label: 'Checked 24h',      value: dropped24h,   color: 'text-blue-600' },
-    { label: 'Sites tracked',    value: sites,        color: 'text-purple-600' },
+    { label: 'Всього позицій',   value: total,        color: 'text-gray-900' },
+    { label: 'Нижче цілі 🎯',   value: belowTarget,  color: 'text-green-600' },
+    { label: 'Перевірено за 24г', value: dropped24h,  color: 'text-blue-600' },
+    { label: 'Сайтів',           value: sites,        color: 'text-purple-600' },
   ]
 
   return (

@@ -31,12 +31,12 @@ export interface PriceCheck {
 }
 
 export const STATUS_META: Record<ProductStatus, { label: string; color: string }> = {
-  watching: { label: '👀 Watching',  color: 'bg-gray-100 text-gray-700' },
-  alert:    { label: '🔔 Alert!',    color: 'bg-yellow-100 text-yellow-800' },
-  to_buy:   { label: '✅ To Buy',    color: 'bg-green-100 text-green-800' },
-  ordered:  { label: '📦 Ordered',   color: 'bg-blue-100 text-blue-800' },
-  in_stock: { label: '🏠 In Stock',  color: 'bg-purple-100 text-purple-800' },
-  skipped:  { label: '❌ Skipped',   color: 'bg-red-100 text-red-700' },
+  watching: { label: '👀 Слідкую',    color: 'bg-gray-100 text-gray-700' },
+  alert:    { label: '🔔 Алерт!',     color: 'bg-yellow-100 text-yellow-800' },
+  to_buy:   { label: '✅ Купити',      color: 'bg-green-100 text-green-800' },
+  ordered:  { label: '📦 Замовлено',  color: 'bg-blue-100 text-blue-800' },
+  in_stock: { label: '🏠 Отримано',   color: 'bg-purple-100 text-purple-800' },
+  skipped:  { label: '❌ Пропустити', color: 'bg-red-100 text-red-700' },
 }
 
 export const ALL_STATUSES: ProductStatus[] = ['watching','alert','to_buy','ordered','in_stock','skipped']

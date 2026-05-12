@@ -10,7 +10,7 @@ export function HotDeals({ products }: { products: Product[] }) {
 
   return (
     <div>
-      <h2 className="text-lg font-semibold mb-3">🔥 Hot Deals</h2>
+      <h2 className="text-lg font-semibold mb-3">🔥 Гарячі пропозиції</h2>
       <div className="flex gap-3 overflow-x-auto pb-2">
         {hot.map(p => {
           const pct = p.target_price && p.current_price
@@ -25,7 +25,7 @@ export function HotDeals({ products }: { products: Product[] }) {
               <div className="text-sm font-medium line-clamp-2 mb-2">{p.name || p.url}</div>
               <div className="text-xl font-bold text-green-600">{fmt(p.current_price, p.currency || 'USD')}</div>
               <div className="text-xs text-gray-400 line-through">{fmt(p.target_price)}</div>
-              <div className="text-xs text-green-500 mt-1">{pct > 0 ? `${pct}% below target` : 'At target'}</div>
+              <div className="text-xs text-green-500 mt-1">{pct > 0 ? `${pct}% нижче цілі` : 'На рівні цілі'}</div>
             </a>
           )
         })}

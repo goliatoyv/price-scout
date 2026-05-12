@@ -24,13 +24,13 @@ export default function Dashboard() {
       <header className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Price Scout 👟</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Price monitoring for buyers</p>
+          <p className="text-sm text-gray-500 mt-0.5">Моніторинг цін для баєра</p>
         </div>
         <AddProductModal onAdded={load} />
       </header>
 
       {loading ? (
-        <div className="flex items-center justify-center py-20 text-gray-400">Loading...</div>
+        <div className="flex items-center justify-center py-20 text-gray-400">Завантаження...</div>
       ) : (
         <>
           <StatsBar products={products} />

@@ -12,9 +12,9 @@ export function timeAgo(iso: string | null): string {
   if (!iso) return '—'
   const diff = Date.now() - new Date(iso).getTime()
   const h = Math.floor(diff / 3600000)
-  if (h < 1) return 'just now'
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
+  if (h < 1) return 'щойно'
+  if (h < 24) return `${h}г тому`
+  return `${Math.floor(h / 24)}д тому`
 }
 
 export function trendIcon(current: number | null, prev: number | null): string {

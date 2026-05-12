@@ -31,51 +31,51 @@ export function AddProductModal({ onAdded }: Props) {
     <>
       <button onClick={() => setOpen(true)}
         className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-medium text-sm transition-colors">
-        <Plus size={16} /> Add Product
+        <Plus size={16} /> Додати товар
       </button>
 
       {open && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-lg font-semibold">Add Product</h2>
+              <h2 className="text-lg font-semibold">Додати товар</h2>
               <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
             </div>
             <form onSubmit={submit} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Product URL *</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">URL товару *</label>
                 <input required value={url} onChange={e => setUrl(e.target.value)} placeholder="https://..."
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Target Price</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Цільова ціна</label>
                   <input type="number" step="0.01" value={target} onChange={e => setTarget(e.target.value)} placeholder="90.00"
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Size</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Розмір</label>
                   <input value={size} onChange={e => setSize(e.target.value)} placeholder="M9 / EU43"
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-                <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Any notes..."
+                <label className="block text-sm font-medium text-gray-700 mb-1">Нотатки</label>
+                <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Будь-які нотатки..."
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Пріоритет</label>
                 <select value={priority} onChange={e => setPrio(e.target.value)}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                  <option value="1">Normal</option>
-                  <option value="2">High</option>
-                  <option value="3">🔥 Urgent</option>
+                  <option value="1">Звичайний</option>
+                  <option value="2">Високий</option>
+                  <option value="3">🔥 Терміново</option>
                 </select>
               </div>
               <button type="submit" disabled={loading}
                 className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white py-2 rounded-xl font-medium text-sm transition-colors">
-                {loading ? 'Adding...' : 'Add Product'}
+                {loading ? 'Додаємо...' : 'Додати товар'}
               </button>
             </form>
           </div>

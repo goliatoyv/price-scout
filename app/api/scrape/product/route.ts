@@ -167,32 +167,48 @@ export async function POST(req: Request) {
     const isNewSite = !saved
     const needsJs   = saved?.needs_js ?? false
 
-    // Fetch HTML
-    let html = await fetchPage(product.url, needsJs)
-
-    // Extract using known or discovered strategy
-    let data: Partial<ProductData> = {}
-    let usedStrategy: SiteStrategy['strategy'] | null = null
+    // Fetch HTML — auto-retry with JS render on 403/block
+    let html: string | null = null
     let usedJs = needsJs
+    let usedStrategy: SiteStrategy['strategy'] | null = null
+    let data: Partial<ProductData> = {}
 
-    // Always try JSON-LD + OG first (fast, free)
-    const structured = { ...extractMeta(html), ...extractJsonLd(html) }
-
-    if (structured.price != null) {
-      data = structured
-      // Determine which source had the price
-      usedStrategy = Object.keys(extractJsonLd(html)).includes('price') ? 'json_ld' : 'og_meta'
+    try {
+      html = await fetchPage(product.url, needsJs)
+    } catch {
+      html = null
     }
 
-    // No price → try JS render
-    if (data.price == null && process.env.SCRAPER_API_KEY) {
-      html   = await fetchPage(product.url, true)
-      usedJs = true
-      const rendered = { ...extractMeta(html), ...extractJsonLd(html) }
-      if (rendered.price != null) {
-        data = rendered
-        usedStrategy = Object.keys(extractJsonLd(html)).includes('price') ? 'json_ld' : 'og_meta'
+    // Got blocked or no content → try JS render
+    if ((!html || html.length < 500) && process.env.SCRAPER_API_KEY) {
+      try {
+        html   = await fetchPage(product.url, true)
+        usedJs = true
+      } catch {
+        html = null
       }
+    }
+
+    if (!html) return NextResponse.json({ error: 'Could not fetch product page' }, { status: 502 })
+
+    // Try JSON-LD + OG meta first
+    const structured = { ...extractMeta(html), ...extractJsonLd(html) }
+    if (structured.price != null) {
+      data = structured
+      usedStrategy = Object.keys(extractJsonLd(html)).length > 0 ? 'json_ld' : 'og_meta'
+    }
+
+    // No price yet → try JS render if not done already
+    if (data.price == null && !usedJs && process.env.SCRAPER_API_KEY) {
+      try {
+        html   = await fetchPage(product.url, true)
+        usedJs = true
+        const rendered = { ...extractMeta(html), ...extractJsonLd(html) }
+        if (rendered.price != null) {
+          data = rendered
+          usedStrategy = Object.keys(extractJsonLd(html)).length > 0 ? 'json_ld' : 'og_meta'
+        }
+      } catch { /* continue to LLM */ }
     }
 
     // Still no price → LLM

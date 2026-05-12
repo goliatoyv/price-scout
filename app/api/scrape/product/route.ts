@@ -239,7 +239,10 @@ async function saveParser(domain: string, sel: SiteSelectors, needsJs: boolean) 
 }
 
 async function markParserFailure(domain: string) {
-  await supabase.rpc('increment_fail_streak', { p_domain: domain }).catch(() => {})
+  try {
+    const { data } = await supabase.from('site_parsers').select('fail_streak').eq('domain', domain).single()
+    await supabase.from('site_parsers').update({ fail_streak: ((data?.fail_streak ?? 0) + 1) }).eq('domain', domain)
+  } catch { /* ignore */ }
 }
 
 // ─── Main handler ─────────────────────────────────────────────────────────────

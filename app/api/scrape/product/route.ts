@@ -155,7 +155,7 @@ export async function POST(req: Request) {
     if (!productId) return NextResponse.json({ error: 'productId required' }, { status: 400 })
 
     const { data: product, error: fetchErr } = await supabase
-      .from('products')
+      .from('products_with_price')
       .select('id, url, name, currency')
       .eq('id', productId)
       .single()

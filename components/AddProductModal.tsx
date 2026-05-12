@@ -1,6 +1,6 @@
 'use client'
 import { useState } from 'react'
-import { X, Plus, Loader } from 'lucide-react'
+import { X, Plus, Loader, Link } from 'lucide-react'
 
 interface Props { onAdded: () => void }
 
@@ -11,14 +11,10 @@ export function AddProductModal({ onAdded }: Props) {
   const [phase, setPhase]   = useState<Phase>('idle')
   const [url, setUrl]       = useState('')
   const [target, setTarget] = useState('')
-  const [size, setSize]     = useState('')
-  const [notes, setNotes]   = useState('')
-  const [priority, setPrio] = useState('1')
   const [error, setError]   = useState('')
 
   function close() {
-    setOpen(false); setUrl(''); setTarget(''); setSize('')
-    setNotes(''); setPrio('1'); setError(''); setPhase('idle')
+    setOpen(false); setUrl(''); setTarget(''); setError(''); setPhase('idle')
   }
 
   async function submit(e: React.FormEvent) {
@@ -29,13 +25,12 @@ export function AddProductModal({ onAdded }: Props) {
       const r = await fetch('/api/products', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, target_price: target ? +target : null, size, notes, priority: +priority }),
+        body: JSON.stringify({ url, target_price: target ? +target : null }),
       })
       const product = await r.json()
       if (!r.ok || product.error) throw new Error(product.error || 'Помилка збереження')
 
       setPhase('scraping')
-      // auto-scrape: fetch price, name, image
       await fetch('/api/scrape/product', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -51,11 +46,6 @@ export function AddProductModal({ onAdded }: Props) {
   }
 
   const loading = phase !== 'idle'
-  const btnLabel = phase === 'saving'
-    ? <><Loader size={14} className="animate-spin" /> Зберігаємо...</>
-    : phase === 'scraping'
-    ? <><Loader size={14} className="animate-spin" /> Завантажуємо з сайту...</>
-    : 'Додати товар'
 
   return (
     <>
@@ -65,48 +55,68 @@ export function AddProductModal({ onAdded }: Props) {
       </button>
 
       {open && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={e => { if (e.target === e.currentTarget) close() }}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
-            <div className="flex justify-between items-center mb-4">
+            <div className="flex justify-between items-center mb-6">
               <h2 className="text-lg font-semibold">Додати товар</h2>
-              <button onClick={close} disabled={loading} className="text-gray-400 hover:text-gray-600 disabled:opacity-40"><X size={20} /></button>
+              <button onClick={close} disabled={loading} className="text-gray-400 hover:text-gray-600 disabled:opacity-40">
+                <X size={20} />
+              </button>
             </div>
+
             <form onSubmit={submit} className="space-y-4">
+              {/* URL */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">URL товару *</label>
-                <input required value={url} onChange={e => setUrl(e.target.value)} placeholder="https://..."
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Цільова ціна</label>
-                  <input type="number" step="0.01" value={target} onChange={e => setTarget(e.target.value)} placeholder="90.00"
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+                  Посилання на товар
+                </label>
+                <div className="relative">
+                  <Link size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    required
+                    autoFocus
+                    value={url}
+                    onChange={e => setUrl(e.target.value)}
+                    placeholder="https://..."
+                    className="w-full pl-9 pr-3 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Розмір</label>
-                  <input value={size} onChange={e => setSize(e.target.value)} placeholder="M9 / EU43"
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+
+              {/* Target price */}
+              <div>
+                <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+                  Цільова ціна <span className="normal-case text-gray-400 font-normal">(необов&apos;язково)</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={target}
+                    onChange={e => setTarget(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full pl-7 pr-3 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
                 </div>
+                <p className="text-xs text-gray-400 mt-1">Назва, фото та ціна підтягнуться автоматично</p>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Нотатки</label>
-                <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Будь-які нотатки..."
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Пріоритет</label>
-                <select value={priority} onChange={e => setPrio(e.target.value)}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                  <option value="1">Звичайний</option>
-                  <option value="2">Високий</option>
-                  <option value="3">🔥 Терміново</option>
-                </select>
-              </div>
-              {error && <p className="text-sm text-red-500">{error}</p>}
-              <button type="submit" disabled={loading}
-                className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white py-2 rounded-xl font-medium text-sm transition-colors">
-                {btnLabel}
+
+              {error && (
+                <div className="bg-red-50 border border-red-100 text-red-600 text-sm rounded-xl px-3 py-2">
+                  {error}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={!url || loading}
+                className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white py-3 rounded-xl font-medium text-sm transition-colors"
+              >
+                {phase === 'idle'    && 'Додати'}
+                {phase === 'saving'  && <><Loader size={14} className="animate-spin" /> Зберігаємо...</>}
+                {phase === 'scraping' && <><Loader size={14} className="animate-spin" /> Завантажуємо дані з сайту...</>}
               </button>
             </form>
           </div>

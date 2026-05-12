@@ -7,9 +7,12 @@ import { WatchList } from '@/components/WatchList'
 import { AddProductModal } from '@/components/AddProductModal'
 import { BulkImportModal } from '@/components/BulkImportModal'
 
+export type QuickFilter = '' | 'below_target' | 'in_stock' | 'hot' | 'checked_24h'
+
 export default function Dashboard() {
-  const [products, setProducts] = useState<Product[]>([])
-  const [loading, setLoading]   = useState(true)
+  const [products,     setProducts]     = useState<Product[]>([])
+  const [loading,      setLoading]      = useState(true)
+  const [quickFilter,  setQuickFilter]  = useState<QuickFilter>('')
 
   const load = useCallback(async () => {
     const r = await fetch('/api/products')
@@ -37,9 +40,18 @@ export default function Dashboard() {
         <div className="flex items-center justify-center py-20 text-gray-400">Завантаження...</div>
       ) : (
         <>
-          <StatsBar products={products} />
+          <StatsBar
+            products={products}
+            activeFilter={quickFilter}
+            onFilter={f => setQuickFilter(prev => prev === f ? '' : f)}
+          />
           <HotDeals products={products} />
-          <WatchList products={products} onUpdate={load} />
+          <WatchList
+            products={products}
+            onUpdate={load}
+            quickFilter={quickFilter}
+            onQuickFilter={f => setQuickFilter(prev => prev === f ? '' : f)}
+          />
         </>
       )}
     </main>

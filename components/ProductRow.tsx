@@ -100,7 +100,16 @@ export function ProductRow({ product: p, onUpdate }: Props) {
       </td>
 
       {/* Last checked */}
-      <td className="py-3 px-2 text-xs text-gray-400 whitespace-nowrap">{timeAgo(p.last_checked)}</td>
+      <td className="py-3 px-2 whitespace-nowrap">
+        <div className="text-xs text-gray-400">{timeAgo(p.last_checked)}</div>
+        {p.last_checked && (
+          <div className="text-xs text-gray-300">
+            {new Date(p.last_checked).toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit' })}
+            {' '}
+            {new Date(p.last_checked).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })}
+          </div>
+        )}
+      </td>
 
       {/* Actions */}
       <td className="py-3 pl-2 pr-4">

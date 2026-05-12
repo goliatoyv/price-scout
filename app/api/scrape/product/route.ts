@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
-import * as cheerio from 'cheerio'
 import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
@@ -19,16 +18,9 @@ interface ProductData {
   image_url:      string | null
 }
 
-interface SiteSelectors {
-  strategy:          'json_ld' | 'og_meta' | 'css'
-  needs_js:          boolean
-  price?:            string
-  price_attr?:       string
-  original_price?:   string
-  name?:             string
-  image?:            string
-  image_attr?:       string
-  currency?:         string
+interface SiteStrategy {
+  strategy: 'json_ld' | 'og_meta' | 'llm'
+  needs_js: boolean
 }
 
 // ─── HTTP fetch ───────────────────────────────────────────────────────────────
@@ -101,39 +93,6 @@ function extractMeta(html: string): Partial<ProductData> {
   return result
 }
 
-function extractWithSelectors(html: string, sel: SiteSelectors): Partial<ProductData> {
-  const $ = cheerio.load(html)
-  const result: Partial<ProductData> = {}
-
-  function read(selector: string, attr?: string): string | null {
-    const el = $(selector).first()
-    if (!el.length) return null
-    return attr ? (el.attr(attr) ?? null) : (el.text().trim() || null)
-  }
-
-  if (sel.price) {
-    const raw = read(sel.price, sel.price_attr)
-    if (raw) result.price = parseFloat(raw.replace(/[^0-9.]/g, ''))
-  }
-  if (sel.original_price) {
-    const raw = read(sel.original_price)
-    if (raw) result.original_price = parseFloat(raw.replace(/[^0-9.]/g, ''))
-  }
-  if (sel.name) {
-    const v = read(sel.name)
-    if (v) result.name = v
-  }
-  if (sel.image) {
-    const v = read(sel.image, sel.image_attr || 'src')
-    if (v) result.image_url = v
-  }
-  if (sel.currency) result.currency = sel.currency
-
-  return result
-}
-
-// ─── LLM fallback ─────────────────────────────────────────────────────────────
-
 async function extractWithLlm(html: string, url: string): Promise<Partial<ProductData>> {
   const trimmed = html
     .replace(/<script[\s\S]*?<\/script>/gi, '')
@@ -147,7 +106,7 @@ async function extractWithLlm(html: string, url: string): Promise<Partial<Produc
     messages: [{
       role: 'user',
       content: `Extract product details from this HTML (URL: ${url}).
-Return ONLY JSON: {"price":99.99,"original_price":129.99,"currency":"USD","in_stock":true,"name":"...","image_url":"..."}
+Return ONLY JSON: {"price":99.99,"original_price":129.99,"currency":"USD","in_stock":true,"name":"Product Name","image_url":"https://..."}
 - price: current/sale price as number (required)
 - original_price: crossed-out price or null
 - currency: 3-letter ISO
@@ -165,84 +124,27 @@ HTML:\n${trimmed}`,
   return {}
 }
 
-// ─── Learn selectors from successful extraction ───────────────────────────────
-
-async function learnSelectors(
-  html: string,
-  url: string,
-  extracted: ProductData,
-  strategy: 'json_ld' | 'og_meta' | 'css',
-): Promise<SiteSelectors | null> {
-  // For JSON-LD / OG strategies we just record the strategy — no CSS needed
-  if (strategy !== 'css') {
-    return { strategy, needs_js: false }
-  }
-
-  // Ask Claude to generate CSS selectors that would extract the same data
-  const trimmed = html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/\s{2,}/g, ' ')
-    .slice(0, 14000)
-
-  const msg = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 512,
-    messages: [{
-      role: 'user',
-      content: `We successfully extracted this product data from a page:
-Price: ${extracted.price} ${extracted.currency}
-Name: ${extracted.name ?? 'unknown'}
-Image: ${extracted.image_url ?? 'none'}
-
-Now generate CSS selectors that reliably extract these values from this HTML.
-Return ONLY JSON (no explanation):
-{
-  "price": "CSS selector for price element",
-  "price_attr": "attribute name if price is in an attribute, otherwise null",
-  "original_price": "CSS selector for original/crossed-out price or null",
-  "name": "CSS selector for product title or null",
-  "image": "CSS selector for main product image or null",
-  "image_attr": "attribute for image URL (usually 'src' or 'data-src')"
-}
-
-HTML:\n${trimmed}`,
-    }],
-  })
-
-  try {
-    const raw = msg.content[0].type === 'text' ? msg.content[0].text : ''
-    const m = raw.match(/\{[\s\S]*\}/)
-    if (!m) return null
-    const sel = JSON.parse(m[0])
-    return { strategy: 'css', needs_js: false, currency: extracted.currency, ...sel }
-  } catch { return null }
-}
-
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 
-async function loadParser(domain: string): Promise<SiteSelectors | null> {
+async function loadStrategy(domain: string): Promise<SiteStrategy | null> {
   const { data } = await supabase
     .from('site_parsers')
     .select('selectors, needs_js')
     .eq('domain', domain)
     .single()
   if (!data?.selectors) return null
-  return { ...(data.selectors as object), needs_js: data.needs_js ?? false } as SiteSelectors
+  const sel = data.selectors as Record<string, unknown>
+  return {
+    strategy: (sel.strategy as SiteStrategy['strategy']) ?? 'llm',
+    needs_js: data.needs_js ?? false,
+  }
 }
 
-async function saveParser(domain: string, sel: SiteSelectors, needsJs: boolean) {
+async function saveStrategy(domain: string, strategy: SiteStrategy['strategy'], needsJs: boolean) {
   await supabase.from('site_parsers').upsert(
-    { domain, selectors: sel, needs_js: needsJs, last_verified: new Date().toISOString() },
+    { domain, selectors: { strategy }, needs_js: needsJs, last_verified: new Date().toISOString() },
     { onConflict: 'domain' },
   )
-}
-
-async function markParserFailure(domain: string) {
-  try {
-    const { data } = await supabase.from('site_parsers').select('fail_streak').eq('domain', domain).single()
-    await supabase.from('site_parsers').update({ fail_streak: ((data?.fail_streak ?? 0) + 1) }).eq('domain', domain)
-  } catch { /* ignore */ }
 }
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
@@ -260,69 +162,45 @@ export async function POST(req: Request) {
 
     if (fetchErr || !product) return NextResponse.json({ error: 'Product not found' }, { status: 404 })
 
-    const domain = new URL(product.url).hostname.replace('www.', '')
+    const domain    = new URL(product.url).hostname.replace('www.', '')
+    const saved     = await loadStrategy(domain)
+    const isNewSite = !saved
+    const needsJs   = saved?.needs_js ?? false
 
-    // ── 1. Check for a saved parser ──────────────────────────────────────────
-    const savedParser = await loadParser(domain)
-    const isNewSite   = !savedParser
+    // Fetch HTML
+    let html = await fetchPage(product.url, needsJs)
 
-    // ── 2. Fetch HTML (with JS rendering if known to need it) ────────────────
-    const needsRender = savedParser?.needs_js ?? false
-    let html = await fetchPage(product.url, needsRender)
-
-    // ── 3. Extract data ──────────────────────────────────────────────────────
+    // Extract using known or discovered strategy
     let data: Partial<ProductData> = {}
-    let usedStrategy: 'json_ld' | 'og_meta' | 'css' | null = null
-    let usedJs = needsRender
+    let usedStrategy: SiteStrategy['strategy'] | null = null
+    let usedJs = needsJs
 
-    if (savedParser) {
-      // Known site: use cached strategy
-      if (savedParser.strategy === 'json_ld') {
-        data = { ...extractMeta(html), ...extractJsonLd(html) }
-        usedStrategy = 'json_ld'
-      } else if (savedParser.strategy === 'og_meta') {
-        data = extractMeta(html)
-        usedStrategy = 'og_meta'
-      } else if (savedParser.strategy === 'css') {
-        data = extractWithSelectors(html, savedParser)
-        usedStrategy = 'css'
-      }
+    // Always try JSON-LD + OG first (fast, free)
+    const structured = { ...extractMeta(html), ...extractJsonLd(html) }
 
-      // If cached strategy failed, retry with JS render
-      if (data.price == null && !needsRender && process.env.SCRAPER_API_KEY) {
-        html   = await fetchPage(product.url, true)
-        usedJs = true
-        if (savedParser.strategy === 'json_ld')  data = { ...extractMeta(html), ...extractJsonLd(html) }
-        if (savedParser.strategy === 'og_meta')  data = extractMeta(html)
-        if (savedParser.strategy === 'css')      data = extractWithSelectors(html, savedParser)
-      }
+    if (structured.price != null) {
+      data = structured
+      // Determine which source had the price
+      usedStrategy = Object.keys(extractJsonLd(html)).includes('price') ? 'json_ld' : 'og_meta'
+    }
 
-      if (data.price == null) await markParserFailure(domain)
-    } else {
-      // New site: full discovery pipeline
-      data = { ...extractMeta(html), ...extractJsonLd(html) }
-      if (data.price != null) {
+    // No price → try JS render
+    if (data.price == null && process.env.SCRAPER_API_KEY) {
+      html   = await fetchPage(product.url, true)
+      usedJs = true
+      const rendered = { ...extractMeta(html), ...extractJsonLd(html) }
+      if (rendered.price != null) {
+        data = rendered
         usedStrategy = Object.keys(extractJsonLd(html)).includes('price') ? 'json_ld' : 'og_meta'
       }
+    }
 
-      // No price yet → try JS render
-      if (data.price == null && process.env.SCRAPER_API_KEY) {
-        html   = await fetchPage(product.url, true)
-        usedJs = true
-        const rendered = { ...extractMeta(html), ...extractJsonLd(html) }
-        if (rendered.price != null) {
-          data = rendered
-          usedStrategy = Object.keys(extractJsonLd(html)).includes('price') ? 'json_ld' : 'og_meta'
-        }
-      }
-
-      // Still nothing → LLM
-      if (data.price == null) {
-        const llm = await extractWithLlm(html, product.url)
-        if (llm.price != null) {
-          data = { ...data, ...llm }
-          usedStrategy = 'css'  // will generate CSS selectors below
-        }
+    // Still no price → LLM
+    if (data.price == null) {
+      const llm = await extractWithLlm(html, product.url)
+      if (llm.price != null) {
+        data = { ...data, ...llm }
+        usedStrategy = 'llm'
       }
     }
 
@@ -330,47 +208,44 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Could not extract price from page' }, { status: 422 })
     }
 
-    const extracted = data as ProductData
-
-    // ── 4. Learn and save parser for new sites ───────────────────────────────
+    // Save strategy for new sites
     if (isNewSite && usedStrategy) {
-      const learned = await learnSelectors(html, product.url, extracted, usedStrategy)
-      if (learned) await saveParser(domain, learned, usedJs)
+      await saveStrategy(domain, usedStrategy, usedJs)
     }
 
-    // ── 5. Update DB ─────────────────────────────────────────────────────────
-    const currency = extracted.currency || product.currency || 'USD'
+    const currency = (data.currency || product.currency || 'USD').trim().slice(0, 3)
     const now = new Date().toISOString()
 
     await supabase.from('price_checks').insert({
       product_id:      product.id,
-      price:           extracted.price,
-      original_price:  extracted.original_price ?? null,
+      price:           data.price,
+      original_price:  data.original_price ?? null,
       currency,
-      in_stock:        extracted.in_stock ?? true,
+      in_stock:        data.in_stock ?? true,
       checked_at:      now,
       parser_strategy: usedStrategy ?? 'unknown',
     })
 
     const updateFields: Record<string, unknown> = {
-      current_price:  extracted.price,
-      original_price: extracted.original_price ?? null,
+      current_price:  data.price,
+      original_price: data.original_price ?? null,
       currency,
-      in_stock:       extracted.in_stock ?? true,
+      in_stock:       data.in_stock ?? true,
       last_checked:   now,
     }
-    if (extracted.name      && !product.name) updateFields.name      = extracted.name
-    if (extracted.image_url)                  updateFields.image_url = extracted.image_url
+    if (data.name      && !product.name) updateFields.name      = data.name
+    if (data.image_url)                  updateFields.image_url = data.image_url
 
     await supabase.from('products').update(updateFields).eq('id', product.id)
 
     return NextResponse.json({
-      price:       extracted.price,
+      price:        data.price,
       currency,
-      in_stock:    extracted.in_stock ?? true,
-      name:        extracted.name ?? null,
-      image_url:   extracted.image_url ?? null,
+      in_stock:     data.in_stock ?? true,
+      name:         data.name ?? null,
+      image_url:    data.image_url ?? null,
       site_learned: isNewSite && !!usedStrategy,
+      strategy:     usedStrategy,
     })
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)

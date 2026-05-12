@@ -1,6 +1,6 @@
 'use client'
 import { useState } from 'react'
-import { Trash2, ExternalLink } from 'lucide-react'
+import { Trash2, ExternalLink, RefreshCw } from 'lucide-react'
 import { Product, ProductStatus, STATUS_META, ALL_STATUSES } from '@/lib/types'
 import { fmt, pctToTarget, timeAgo } from '@/lib/utils'
 import { StatusBadge } from './StatusBadge'
@@ -10,7 +10,8 @@ import { EditProductModal } from './EditProductModal'
 interface Props { product: Product; onUpdate: () => void }
 
 export function ProductRow({ product: p, onUpdate }: Props) {
-  const [status, setStatus] = useState<ProductStatus>(p.status)
+  const [status, setStatus]       = useState<ProductStatus>(p.status)
+  const [refreshing, setRefresh]  = useState(false)
 
   async function updateStatus(s: ProductStatus) {
     setStatus(s)
@@ -19,6 +20,17 @@ export function ProductRow({ product: p, onUpdate }: Props) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: s }),
     })
+    onUpdate()
+  }
+
+  async function refreshPrice() {
+    setRefresh(true)
+    await fetch('/api/scrape/product', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ productId: p.id }),
+    })
+    setRefresh(false)
     onUpdate()
   }
 
@@ -97,6 +109,11 @@ export function ProductRow({ product: p, onUpdate }: Props) {
             className="text-gray-400 hover:text-blue-500 p-1 rounded transition-colors">
             <ExternalLink size={14} />
           </a>
+          <button onClick={refreshPrice} disabled={refreshing}
+            className="text-gray-400 hover:text-blue-500 p-1 rounded transition-colors disabled:opacity-40"
+            title="Оновити ціну">
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+          </button>
           <EditProductModal product={p} onUpdated={onUpdate} />
           <button onClick={deleteProduct} className="text-gray-400 hover:text-red-500 p-1 rounded transition-colors">
             <Trash2 size={14} />

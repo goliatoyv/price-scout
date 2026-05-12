@@ -43,6 +43,27 @@ async function fetchPage(url: string, render = false): Promise<string> {
 
 // ─── Extraction methods ───────────────────────────────────────────────────────
 
+function extractFromProduct(obj: Record<string, unknown>, result: Partial<ProductData>) {
+  if (typeof obj.name === 'string' && !result.name) result.name = obj.name
+  const img = obj.image
+  if (!result.image_url) {
+    if (typeof img === 'string') result.image_url = img
+    else if (Array.isArray(img) && typeof img[0] === 'string') result.image_url = img[0]
+    else if (img && typeof img === 'object' && 'url' in (img as object))
+      result.image_url = (img as Record<string, string>).url
+  }
+  const offers = obj.offers as Record<string, unknown> | undefined
+  if (offers && result.price == null) {
+    const offerList = Array.isArray(offers) ? offers : [offers]
+    const first = offerList[0] as Record<string, unknown>
+    if (first?.price != null) {
+      result.price = parseFloat(String(first.price))
+      result.currency = typeof first.priceCurrency === 'string' ? first.priceCurrency : 'USD'
+      result.in_stock = String(first.availability ?? '').toLowerCase().includes('instock')
+    }
+  }
+}
+
 function extractJsonLd(html: string): Partial<ProductData> {
   const result: Partial<ProductData> = {}
   const blocks = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)]
@@ -52,23 +73,20 @@ function extractJsonLd(html: string): Partial<ProductData> {
       const items: unknown[] = Array.isArray(json) ? json : [json]
       for (const item of items) {
         const obj = item as Record<string, unknown>
-        if (obj['@type'] !== 'Product') continue
-        if (typeof obj.name === 'string' && !result.name) result.name = obj.name
-        const img = obj.image
-        if (!result.image_url) {
-          if (typeof img === 'string') result.image_url = img
-          else if (Array.isArray(img) && typeof img[0] === 'string') result.image_url = img[0]
-          else if (img && typeof img === 'object' && 'url' in (img as object))
-            result.image_url = (img as Record<string, string>).url
-        }
-        const offers = obj.offers as Record<string, unknown> | undefined
-        if (offers && result.price == null) {
-          const offerList = Array.isArray(offers) ? offers : [offers]
-          const first = offerList[0] as Record<string, unknown>
-          if (first?.price != null) {
-            result.price = parseFloat(String(first.price))
-            result.currency = typeof first.priceCurrency === 'string' ? first.priceCurrency : 'USD'
-            result.in_stock = String(first.availability ?? '').toLowerCase().includes('instock')
+        const type = obj['@type']
+
+        if (type === 'Product') {
+          extractFromProduct(obj, result)
+        } else if (type === 'ProductGroup') {
+          // Nike pattern: ProductGroup → hasVariant[] → Product with offers
+          if (typeof obj.name === 'string' && !result.name) result.name = obj.name
+          const variants = obj.hasVariant as Record<string, unknown>[] | undefined
+          if (Array.isArray(variants) && variants.length > 0) {
+            // Take first variant that has an offer with a price
+            for (const v of variants) {
+              if (result.price != null) break
+              extractFromProduct(v as Record<string, unknown>, result)
+            }
           }
         }
       }

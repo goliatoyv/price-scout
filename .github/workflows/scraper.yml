@@ -2,7 +2,11 @@ name: Price Scraper
 
 on:
   schedule:
-    - cron: "0 */4 * * *"
+    # 07:00 UTC = 10:00 Kyiv during EEST (summer, late Mar–late Oct).
+    # In EET (winter) this fires at 09:00 Kyiv — GitHub Actions cron has
+    # no native timezone support. Adjust to "0 8 * * *" after DST ends if
+    # you need 10:00 Kyiv year-round.
+    - cron: "0 7 * * *"
   workflow_dispatch:
 
 env:

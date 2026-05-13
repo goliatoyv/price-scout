@@ -3,7 +3,10 @@ import { supabase, supabaseAdmin } from '@/lib/supabase'
 import { runPipeline } from '@/lib/scraper/pipeline'
 
 export const dynamic     = 'force-dynamic'
-export const maxDuration = 60
+// Render-heavy SPAs (Nike Launch, Adidas) can take 30-50s in ScraperAPI; we
+// need headroom for an optional LLM follow-up call after render. Requires
+// Vercel Pro plan; on Hobby this silently caps at 60s.
+export const maxDuration = 90
 
 interface ProductRow {
   id:        string

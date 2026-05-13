@@ -1,4 +1,4 @@
-import { fetchPage, canRender } from './fetch'
+import { fetchPage, canRender, type FetchMode } from './fetch'
 import { extractJsonLd } from './strategies/json-ld'
 import { extractOgMeta } from './strategies/og-meta'
 import { extractWithLlm } from './strategies/llm'
@@ -21,95 +21,107 @@ function mergeStructured(html: string): { data: Partial<ProductData> | null; str
   return { data: null, strategy: null }
 }
 
+async function safeFetch(url: string, mode: FetchMode): Promise<string | null> {
+  try {
+    const r = await fetchPage(url, mode)
+    return r.html && r.html.length >= 500 ? r.html : null
+  } catch (e) {
+    console.error(`[scrape] fetch ${mode} failed`, e)
+    return null
+  }
+}
+
+/**
+ * Adaptive product page extraction.
+ *
+ * Mode escalation ladder (each only fires if the previous step produced no
+ * price). Stops at first success:
+ *   1. direct   — plain HTTP, free.
+ *   2. render   — ScraperAPI with JS rendering (~5 credits).
+ *   3. premium  — ScraperAPI with premium proxies (~10 credits) — pierces
+ *                 Akamai/Imperva (adidas, Nike SNKRS).
+ *   4. LLM     — Claude Haiku reads the best HTML we have and returns JSON.
+ *
+ * Successful mode is persisted as site_parsers.{strategy, needs_js} so
+ * future runs skip the cheaper-but-useless steps.
+ */
 export async function runPipeline(url: string): Promise<PipelineOutcome> {
   const domain = domainOf(url)
   const saved  = await loadStrategy(domain)
   const hard   = isHardSite(url)
 
-  // Render only when we know it's needed: cached needs_js OR known-hard site.
-  const initialRender = ((saved?.needs_js ?? false) || hard) && canRender()
+  // Decide where to START. If we've already learned the domain needs JS, or
+  // it's a known hard host, skip the useless direct fetch.
+  const startMode: FetchMode =
+    !canRender()                  ? 'direct' :
+    saved?.needs_js               ? 'render' :
+    hard                          ? 'render' :
+                                    'direct'
 
-  let outcome = await fetchPage(url, initialRender)
-  let html    = outcome.html
-  let usedJs  = outcome.rendered
-
-  if (!html || html.length < 500) {
-    throw new Error('Could not fetch product page')
+  let html = await safeFetch(url, startMode)
+  if (!html) {
+    // For 'render' start, fall back to direct so we have *something* for LLM.
+    if (startMode !== 'direct') {
+      html = await safeFetch(url, 'direct')
+    }
+    if (!html) throw new Error('Could not fetch product page')
   }
 
+  let usedJs = startMode !== 'direct'
   let data: Partial<ProductData> | null = null
   let strategy: Strategy | null = null
 
-  // 1. Cached strategy short-circuit.
-  if (saved?.strategy === 'llm') {
-    const r = await extractWithLlm(html, url)
-    if (r) { data = r; strategy = 'llm' }
-  } else if (saved?.strategy === 'og_meta') {
-    const r = extractOgMeta(html)
-    if (r?.price != null) { data = r; strategy = 'og_meta' }
-  } else if (saved?.strategy === 'json_ld') {
-    const r = extractJsonLd(html)
-    if (r?.price != null) { data = { ...extractOgMeta(html), ...r }; strategy = 'json_ld' }
-  }
-
-  // 2. Cache miss / stale → full structured pass.
-  if (!data) {
-    const r = mergeStructured(html)
-    if (r.data && r.strategy) { data = r.data; strategy = r.strategy }
-  }
-
-  // 3. No price → JS render retry only for hard sites (avoid burning credits
-  //    on unknown domains where render likely won't help either).
-  if (!data && !usedJs && hard && canRender()) {
-    try {
-      const rerender = await fetchPage(url, true)
-      html    = rerender.html
-      usedJs  = true
-      const r = mergeStructured(html)
-      if (r.data && r.strategy) { data = r.data; strategy = r.strategy }
-    } catch (e) {
-      console.error('[scrape] hard-site render failed', e)
+  // Helper: try structured extract; if it fails AND cache says 'llm', try LLM.
+  const tryExtract = async (currentHtml: string): Promise<boolean> => {
+    const r = mergeStructured(currentHtml)
+    if (r.data && r.strategy) {
+      data = r.data; strategy = r.strategy
+      return true
     }
+    if (saved?.strategy === 'llm') {
+      const llm = await extractWithLlm(currentHtml, url)
+      if (llm) { data = llm; strategy = 'llm'; return true }
+    }
+    return false
   }
 
-  // 4. If structured extraction failed and we CAN render, skip the LLM on
-  //    the un-rendered HTML — it's almost always a useless ~10s call on SPA
-  //    shells. Go straight to render. We still run LLM-on-direct as a true
-  //    last resort when render is unavailable (no ScraperAPI key).
-  const canTryRender = !usedJs && canRender()
-
-  if (!data && !canTryRender && saved?.strategy !== 'llm') {
-    const r = await extractWithLlm(html, url)
-    if (r) { data = r; strategy = 'llm' }
-  }
-
-  // 5. Render retry: if structured failed and we haven't rendered yet, try
-  //    ScraperAPI once. On success the domain is auto-learned as needs_js=true
-  //    so future runs go straight to render.
-  if (!data && canTryRender) {
-    try {
-      const rerender = await fetchPage(url, true)
-      if (rerender.html && rerender.html.length >= 500) {
-        html   = rerender.html
-        usedJs = true
-        const r = mergeStructured(html)
-        if (r.data && r.strategy) {
-          data = r.data; strategy = r.strategy
-        } else if (saved?.strategy !== 'llm') {
-          const llm = await extractWithLlm(html, url)
-          if (llm) { data = llm; strategy = 'llm' }
+  if (await tryExtract(html)) {
+    // got it on first pass
+  } else if (canRender() && !usedJs) {
+    // Escalate to render
+    const rendered = await safeFetch(url, 'render')
+    if (rendered) {
+      html = rendered; usedJs = true
+      if (!(await tryExtract(html))) {
+        // Try premium as the last paid step
+        const premium = await safeFetch(url, 'premium')
+        if (premium) {
+          html = premium
+          await tryExtract(html)
         }
       }
-    } catch (e) {
-      console.error('[scrape] render retry failed', e)
     }
+  } else if (canRender() && usedJs) {
+    // We started in render (hard-site / needs_js) and it didn't yield;
+    // try premium as the next escalation.
+    const premium = await safeFetch(url, 'premium')
+    if (premium) {
+      html = premium
+      await tryExtract(html)
+    }
+  }
+
+  // Final fallback: LLM on whatever HTML we have. Skip if we know cache=llm
+  // and already tried it inside tryExtract.
+  if (!data && saved?.strategy !== 'llm') {
+    const llm = await extractWithLlm(html, url)
+    if (llm) { data = llm; strategy = 'llm' }
   }
 
   if (!data || data.price == null || !strategy) {
     throw new Error('Could not extract price from page')
   }
 
-  // Persist strategy only when it actually changed — avoid noisy writes.
   const changed =
     saved?.strategy !== strategy || (saved?.needs_js ?? false) !== usedJs
   if (changed) {

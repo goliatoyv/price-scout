@@ -9,13 +9,22 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.5",
 }
 
-def fetch_html(url: str, use_scraper=False, render=False) -> str:
-    if (use_scraper or render) and SCRAPER_KEY:
+def fetch_html(url: str, use_scraper=False, render=False, premium=False) -> str:
+    """Modes:
+      direct  (default)               — plain HTTP, no proxy
+      use_scraper=True                — ScraperAPI without render
+      render=True                     — ScraperAPI with JS rendering (~5 cr)
+      premium=True                    — ScraperAPI with premium proxies (~10 cr)
+                                         for Akamai-protected sites
+    """
+    if (use_scraper or render or premium) and SCRAPER_KEY:
         params = {"api_key": SCRAPER_KEY, "url": url}
-        if render:
+        if render or premium:
             params["render"] = "true"
+        if premium:
+            params["premium"] = "true"
         r = cffi_requests.get("http://api.scraperapi.com",
-                              params=params, timeout=60, impersonate="chrome124")
+                              params=params, timeout=80, impersonate="chrome124")
     else:
         r = cffi_requests.get(url, headers=HEADERS, timeout=30, impersonate="chrome124")
     r.raise_for_status()

@@ -1,16 +1,15 @@
 """
 Adaptive product page extractor — mirrors lib/scraper/pipeline.ts.
 
-Pipeline (stops at first success):
-  1. Fetch HTML; if 403 / <500 bytes → retry with JS render via ScraperAPI.
-  2. If a cached strategy exists, try it first.
-  3. JSON-LD (Product, ProductGroup with hasVariant).
-  4. Open Graph meta tags.
-  5. JS-rendered fetch retry (if not done yet).
-  6. Claude Haiku LLM fallback returning JSON directly.
+Mode escalation ladder (stops at first success):
+  1. direct   — plain HTTP (free).
+  2. render   — ScraperAPI with JS rendering (~5 credits).
+  3. premium  — ScraperAPI with premium proxies (~10 credits) — pierces
+                Akamai/Imperva (adidas, Nike SNKRS).
+  4. LLM     — Claude Haiku reads the best HTML we have and returns JSON.
 
-site_parsers.selectors uses the format {"strategy": "json_ld"|"og_meta"|"llm"}.
-This matches the Next.js endpoint so both writers share one cache.
+site_parsers.selectors stores {"strategy": "json_ld"|"og_meta"|"llm"}, matched
+with the Next.js endpoint so both writers share one cache.
 """
 
 import json
@@ -34,6 +33,7 @@ LLM_MAX_HTML = 12_000
 # is by suffix on the registrable hostname, so adidas.de etc. also match.
 HARD_SITES = ("adidas.com", "adidas.de", "adidas.co.uk", "zalando.de", "zalando.com")
 
+
 def _is_hard_site(url: str) -> bool:
     try:
         from urllib.parse import urlparse
@@ -42,6 +42,7 @@ def _is_hard_site(url: str) -> bool:
         return any(host == d or host.endswith("." + d) for d in HARD_SITES)
     except Exception:
         return False
+
 
 _client: anthropic.Anthropic | None = None
 
@@ -55,23 +56,25 @@ def _llm_client() -> anthropic.Anthropic | None:
     return _client
 
 
-# ─── Fetch ───────────────────────────────────────────────────────────────────
-
-def _fetch(url: str, render: bool) -> str | None:
-    """Single fetch with the requested render mode. No automatic upgrade to
-    ScraperAPI — the caller decides whether to retry."""
-    try:
-        html = fetch_html(url, render=render)
-    except Exception as e:
-        log.warning("fetch failed (render=%s) for %s: %s", render, url, e)
-        return None
-    if not html or len(html) < 500:
-        return None
-    return html
-
-
 def _can_render() -> bool:
     return bool(os.environ.get("SCRAPER_API_KEY"))
+
+
+# ─── Fetch (three modes) ─────────────────────────────────────────────────────
+
+def _safe_fetch(url: str, *, mode: str) -> str | None:
+    """mode: 'direct' | 'render' | 'premium'. Returns None on any failure."""
+    try:
+        kwargs = {}
+        if mode == "render":
+            kwargs["render"] = True
+        elif mode == "premium":
+            kwargs["premium"] = True
+        html = fetch_html(url, **kwargs)
+    except Exception as e:
+        log.warning("fetch %s failed for %s: %s", mode, url, e)
+        return None
+    return html if html and len(html) >= 500 else None
 
 
 # ─── JSON-LD ─────────────────────────────────────────────────────────────────
@@ -80,7 +83,7 @@ def _to_number(v: Any) -> float | None:
     if v is None:
         return None
     if isinstance(v, (int, float)):
-        return float(v) if v == v else None  # rejects NaN
+        return float(v) if v == v else None
     s = re.sub(r"[^\d.,-]", "", str(v)).replace(",", ".")
     try:
         return float(s)
@@ -312,6 +315,17 @@ def _to_result(data: dict, strategy: str) -> ParseResult:
     )
 
 
+def _try_structured(html: str) -> tuple[dict | None, str | None]:
+    soup = BeautifulSoup(html, "html.parser")
+    jl = extract_json_ld(soup)
+    og = extract_og_meta(soup)
+    if jl:
+        return {**(og or {}), **jl}, "json_ld"
+    if og:
+        return og, "og_meta"
+    return None, None
+
+
 def parse(url: str, stored_selectors: dict | None, needs_js: bool = False) -> PipelineOutput | None:
     """Returns (ParseResult, strategy, needs_js) or None on failure."""
     cached_strategy: str | None = None
@@ -320,92 +334,58 @@ def parse(url: str, stored_selectors: dict | None, needs_js: bool = False) -> Pi
         if s in ("json_ld", "og_meta", "llm"):
             cached_strategy = s
 
-    # Decide whether to render: cached needs_js, or known-hard site.
     hard = _is_hard_site(url)
-    initial_render = (needs_js or hard) and _can_render()
 
-    html = _fetch(url, render=initial_render)
+    # Choose starting mode.
+    start_mode = "direct"
+    if _can_render() and (needs_js or hard):
+        start_mode = "render"
+
+    html = _safe_fetch(url, mode=start_mode)
+    if html is None and start_mode != "direct":
+        html = _safe_fetch(url, mode="direct")
     if html is None:
         return None
-    used_js = initial_render
 
-    soup = BeautifulSoup(html, "html.parser")
+    used_js = start_mode != "direct"
     data: dict | None = None
     strategy: str | None = None
 
-    # 1. Cache short-circuit.
-    if cached_strategy == "llm":
-        data = extract_with_llm(html, url)
-        if data:
-            strategy = "llm"
-    elif cached_strategy == "og_meta":
-        og = extract_og_meta(soup)
-        if og:
-            data, strategy = og, "og_meta"
-    elif cached_strategy == "json_ld":
-        jl = extract_json_ld(soup)
-        if jl:
-            og = extract_og_meta(soup) or {}
-            data, strategy = {**og, **jl}, "json_ld"
+    def try_extract(current_html: str) -> bool:
+        nonlocal data, strategy
+        d, s = _try_structured(current_html)
+        if d:
+            data, strategy = d, s
+            return True
+        if cached_strategy == "llm":
+            llm = extract_with_llm(current_html, url)
+            if llm:
+                data, strategy = llm, "llm"
+                return True
+        return False
 
-    # 2. Full structured pass.
-    if data is None:
-        jl = extract_json_ld(soup)
-        og = extract_og_meta(soup)
-        if jl:
-            data = {**(og or {}), **jl}
-            strategy = "json_ld"
-        elif og:
-            data = og
-            strategy = "og_meta"
-
-    # 3. Render retry — only for hard sites / cached needs_js, NOT for unknown
-    #    domains. This is the core of "option C": spend ScraperAPI credits
-    #    only where we know they are needed.
-    if data is None and not used_js and hard and _can_render():
-        rendered_html = _fetch(url, render=True)
-        if rendered_html:
-            html = rendered_html
+    if try_extract(html):
+        pass
+    elif _can_render() and not used_js:
+        rendered = _safe_fetch(url, mode="render")
+        if rendered:
+            html = rendered
             used_js = True
-            soup = BeautifulSoup(html, "html.parser")
-            jl = extract_json_ld(soup)
-            og = extract_og_meta(soup)
-            if jl:
-                data = {**(og or {}), **jl}
-                strategy = "json_ld"
-            elif og:
-                data = og
-                strategy = "og_meta"
+            if not try_extract(html):
+                premium = _safe_fetch(url, mode="premium")
+                if premium:
+                    html = premium
+                    try_extract(html)
+    elif _can_render() and used_js:
+        premium = _safe_fetch(url, mode="premium")
+        if premium:
+            html = premium
+            try_extract(html)
 
-    # 4. LLM fallback on the (possibly direct) HTML — skip if cache routed us
-    #    here already.
     if data is None and cached_strategy != "llm":
         llm = extract_with_llm(html, url)
         if llm:
             data, strategy = llm, "llm"
-
-    # 5. Last-resort render retry: if everything failed on direct HTML AND we
-    #    haven't rendered yet, try ScraperAPI render once. On success the
-    #    domain is auto-learned as needs_js=true so future runs go straight to
-    #    render (skipping the now-known-useless direct fetch).
-    if data is None and not used_js and _can_render():
-        rendered_html = _fetch(url, render=True)
-        if rendered_html:
-            used_js = True
-            html = rendered_html
-            soup = BeautifulSoup(html, "html.parser")
-            jl = extract_json_ld(soup)
-            og = extract_og_meta(soup)
-            if jl:
-                data = {**(og or {}), **jl}
-                strategy = "json_ld"
-            elif og:
-                data = og
-                strategy = "og_meta"
-            else:
-                llm2 = extract_with_llm(html, url)
-                if llm2:
-                    data, strategy = llm2, "llm"
 
     if data is None or strategy is None or data.get("price") is None:
         return None

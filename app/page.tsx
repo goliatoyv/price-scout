@@ -5,7 +5,6 @@ import { StatsBar } from '@/components/StatsBar'
 import { HotDeals } from '@/components/HotDeals'
 import { WatchList } from '@/components/WatchList'
 import { AddProductModal } from '@/components/AddProductModal'
-import { BulkImportModal } from '@/components/BulkImportModal'
 
 export type QuickFilter = '' | 'below_target' | 'in_stock' | 'hot' | 'checked_24h'
 
@@ -31,7 +30,6 @@ export default function Dashboard() {
           <p className="text-sm text-gray-500 mt-0.5">Моніторинг цін для баєра</p>
         </div>
         <div className="flex items-center gap-2">
-          <BulkImportModal onAdded={load} />
           <AddProductModal onAdded={load} />
         </div>
       </header>

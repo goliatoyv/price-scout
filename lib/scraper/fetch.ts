@@ -12,14 +12,18 @@ export interface FetchOutcome {
   rendered: boolean
 }
 
-async function rawFetch(url: string, render: boolean): Promise<FetchOutcome> {
+export type FetchMode = 'direct' | 'render' | 'premium'
+
+async function rawFetch(url: string, mode: FetchMode): Promise<FetchOutcome> {
   const key = process.env.SCRAPER_API_KEY
   let target: string
+  let timeout = TIMEOUT_DIRECT_MS
 
-  if (key) {
-    const params = new URLSearchParams({ api_key: key, url })
-    if (render) params.set('render', 'true')
+  if (mode !== 'direct' && key) {
+    const params = new URLSearchParams({ api_key: key, url, render: 'true' })
+    if (mode === 'premium') params.set('premium', 'true')
     target = `https://api.scraperapi.com/?${params.toString()}`
+    timeout = TIMEOUT_RENDER_MS
   } else {
     // Direct fetch — validate URL to avoid SSRF.
     assertSafeUrl(url)
@@ -28,19 +32,22 @@ async function rawFetch(url: string, render: boolean): Promise<FetchOutcome> {
 
   const res = await fetch(target, {
     headers: { 'User-Agent': UA },
-    signal: AbortSignal.timeout(render ? TIMEOUT_RENDER_MS : TIMEOUT_DIRECT_MS),
+    signal: AbortSignal.timeout(timeout),
   })
   const html = await res.text()
-  return { html, status: res.status, rendered: render }
+  return { html, status: res.status, rendered: mode !== 'direct' }
 }
 
 /**
- * Single fetch with the requested render mode. No automatic upgrade — the
- * caller decides whether to retry. This keeps ScraperAPI usage explicit so
- * we don't burn render credits on every blocked page.
+ * Single fetch with the requested mode:
+ *   'direct'  — plain HTTP, no proxy (free).
+ *   'render'  — ScraperAPI with JS rendering (~5 credits).
+ *   'premium' — ScraperAPI with JS + premium proxies (~10 credits) for
+ *               Akamai/Imperva-protected hosts like adidas, Nike SNKRS.
+ * The caller decides when to escalate.
  */
-export async function fetchPage(url: string, render = false): Promise<FetchOutcome> {
-  return rawFetch(url, render)
+export async function fetchPage(url: string, mode: FetchMode = 'direct'): Promise<FetchOutcome> {
+  return rawFetch(url, mode)
 }
 
 export function canRender(): boolean {

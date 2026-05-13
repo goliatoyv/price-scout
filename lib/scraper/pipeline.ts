@@ -72,17 +72,21 @@ export async function runPipeline(url: string): Promise<PipelineOutcome> {
     }
   }
 
-  // 4. LLM fallback on the (possibly direct) HTML — skip if cache routed us
-  //    here already.
-  if (!data && saved?.strategy !== 'llm') {
+  // 4. If structured extraction failed and we CAN render, skip the LLM on
+  //    the un-rendered HTML — it's almost always a useless ~10s call on SPA
+  //    shells. Go straight to render. We still run LLM-on-direct as a true
+  //    last resort when render is unavailable (no ScraperAPI key).
+  const canTryRender = !usedJs && canRender()
+
+  if (!data && !canTryRender && saved?.strategy !== 'llm') {
     const r = await extractWithLlm(html, url)
     if (r) { data = r; strategy = 'llm' }
   }
 
-  // 5. Last-resort render retry: if everything failed and we have not yet
-  //    rendered, try ScraperAPI once. On success the domain is auto-learned
-  //    as needs_js=true so future runs go straight to render.
-  if (!data && !usedJs && canRender()) {
+  // 5. Render retry: if structured failed and we haven't rendered yet, try
+  //    ScraperAPI once. On success the domain is auto-learned as needs_js=true
+  //    so future runs go straight to render.
+  if (!data && canTryRender) {
     try {
       const rerender = await fetchPage(url, true)
       if (rerender.html && rerender.html.length >= 500) {
@@ -91,13 +95,13 @@ export async function runPipeline(url: string): Promise<PipelineOutcome> {
         const r = mergeStructured(html)
         if (r.data && r.strategy) {
           data = r.data; strategy = r.strategy
-        } else {
+        } else if (saved?.strategy !== 'llm') {
           const llm = await extractWithLlm(html, url)
           if (llm) { data = llm; strategy = 'llm' }
         }
       }
     } catch (e) {
-      console.error('[scrape] last-resort render failed', e)
+      console.error('[scrape] render retry failed', e)
     }
   }
 

@@ -24,21 +24,17 @@ def process(product: dict):
     log.info("Checking: %s", name)
 
     result = None
-    new_selectors = None
 
     if domain in DOMAIN_PARSERS:
         result = DOMAIN_PARSERS[domain](url)
     else:
-        site_parser   = db.get_site_parser(domain)
-        selectors     = site_parser["selectors"] if site_parser else None
-        needs_js      = site_parser.get("needs_js", False) if site_parser else False
+        site_parser = db.get_site_parser(domain)
+        selectors   = site_parser["selectors"] if site_parser else None
+        needs_js    = site_parser.get("needs_js", False) if site_parser else False
         out = llm_parser.parse(url, selectors, needs_js)
-        if isinstance(out, tuple):
-            result, new_selectors = out
-        elif out:
-            result = out
-        if new_selectors:
-            db.upsert_site_parser(domain, new_selectors)
+        if out is not None:
+            result, used_strategy, used_js = out
+            db.upsert_site_parser(domain, {"strategy": used_strategy}, needs_js=used_js)
 
     if result is None:
         streak = db.increment_fail_streak(domain)

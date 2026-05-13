@@ -7,6 +7,7 @@ export interface Product {
   site_domain: string | null
   target_price: number | null
   size: string | null
+  color: string | null
   status: ProductStatus
   priority: number
   image_url: string | null

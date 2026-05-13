@@ -14,6 +14,8 @@ interface ProductRow {
   name:      string | null
   image_url: string | null
   currency:  string | null
+  color:     string | null
+  size:      string | null
 }
 
 function unauthorized(req: Request): boolean {
@@ -42,7 +44,7 @@ export async function POST(req: Request) {
   // Read via RLS-safe view (anon).
   const { data: product, error: readErr } = await supabase
     .from('products_with_price')
-    .select('id, url, name, image_url, currency')
+    .select('id, url, name, image_url, currency, color, size')
     .eq('id', productId)
     .maybeSingle<ProductRow>()
 
@@ -52,7 +54,7 @@ export async function POST(req: Request) {
 
   let outcome
   try {
-    outcome = await runPipeline(product.url)
+    outcome = await runPipeline(product.url, { color: product.color, size: product.size })
   } catch (e) {
     console.error('[scrape] pipeline failed', { productId, url: product.url, error: e })
     const msg = e instanceof Error ? e.message : 'scrape failed'

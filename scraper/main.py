@@ -33,7 +33,11 @@ def process(product: dict):
         site_parser = db.get_site_parser(domain)
         selectors   = site_parser["selectors"] if site_parser else None
         needs_js    = site_parser.get("needs_js", False) if site_parser else False
-        out = llm_parser.parse(url, selectors, needs_js)
+        out = llm_parser.parse(
+            url, selectors, needs_js,
+            color=product.get("color"),
+            size=product.get("size"),
+        )
         if out is not None:
             result, used_strategy, used_js = out
             pipeline_meta = (used_strategy, used_js)

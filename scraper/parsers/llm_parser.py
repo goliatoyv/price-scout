@@ -123,6 +123,63 @@ def _types_of(node: dict) -> list[str]:
     return [str(x) for x in t] if isinstance(t, list) else [str(t)]
 
 
+# ─── Variant filtering ───────────────────────────────────────────────────────
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", s.lower()).strip()
+
+
+def _variant_text(v: dict) -> str:
+    parts: list[str] = []
+    for k in ("color", "colour", "size", "name", "description", "sku", "mpn", "gtin"):
+        if isinstance(v.get(k), str):
+            parts.append(v[k])
+    ap = v.get("additionalProperty")
+    if isinstance(ap, list):
+        for p in ap:
+            if isinstance(p, dict):
+                parts.append(f"{p.get('name', '')}: {p.get('value', '')}")
+    return _norm(" | ".join(parts))
+
+
+def _variant_matches(v: dict, color: str | None, size: str | None) -> bool:
+    text = _variant_text(v)
+    if color and _norm(color) not in text:
+        return False
+    if size and _norm(size) not in text:
+        return False
+    return True
+
+
+def _price_of(node: dict) -> float | None:
+    offers = node.get("offers")
+    if isinstance(offers, list):
+        offers = offers[0] if offers else None
+    if not isinstance(offers, dict):
+        return None
+    return _to_number(offers.get("price") or offers.get("lowPrice"))
+
+
+def _pick_variant(group: dict, color: str | None, size: str | None) -> dict | None:
+    variants = group.get("hasVariant")
+    if not isinstance(variants, list) or not variants:
+        return None
+
+    if color or size:
+        matches = [v for v in variants if isinstance(v, dict) and _variant_matches(v, color, size)]
+        if matches:
+            matches.sort(key=lambda v: _price_of(v) if _price_of(v) is not None else float("inf"))
+            return matches[0]
+
+    # No filter or no matches → cheapest priced variant (better default than first).
+    priced = [(v, _price_of(v)) for v in variants if isinstance(v, dict)]
+    priced = [(v, p) for v, p in priced if p is not None]
+    if not priced:
+        return next((v for v in variants if isinstance(v, dict)), None)
+    priced.sort(key=lambda x: x[1])
+    return priced[0][0]
+
+
 def _from_product_node(node: dict) -> dict | None:
     offers = node.get("offers")
     if isinstance(offers, list):
@@ -152,12 +209,12 @@ def _from_product_node(node: dict) -> dict | None:
     }
 
 
-def _walk_jsonld(node: Any) -> dict | None:
+def _walk_jsonld(node: Any, color: str | None, size: str | None) -> dict | None:
     if node is None or not isinstance(node, (dict, list)):
         return None
     if isinstance(node, list):
         for item in node:
-            r = _walk_jsonld(item)
+            r = _walk_jsonld(item, color, size)
             if r:
                 return r
         return None
@@ -167,37 +224,36 @@ def _walk_jsonld(node: Any) -> dict | None:
         r = _from_product_node(node)
         if r:
             return r
-    if "ProductGroup" in types and isinstance(node.get("hasVariant"), list):
-        for v in node["hasVariant"]:
-            if not isinstance(v, dict):
-                continue
-            merged = dict(v)
-            merged["name"]  = node.get("name") or v.get("name")
-            merged["image"] = node.get("image") or v.get("image")
+    if "ProductGroup" in types:
+        chosen = _pick_variant(node, color, size)
+        if chosen:
+            merged = dict(chosen)
+            merged["name"]  = node.get("name")  or chosen.get("name")
+            merged["image"] = node.get("image") or chosen.get("image")
             r = _from_product_node(merged)
             if r:
                 return r
     if "@graph" in node:
-        r = _walk_jsonld(node["@graph"])
+        r = _walk_jsonld(node["@graph"], color, size)
         if r:
             return r
     return None
 
 
-def extract_json_ld(soup: BeautifulSoup) -> dict | None:
+def extract_json_ld(soup: BeautifulSoup, color: str | None = None, size: str | None = None) -> dict | None:
     for el in soup.find_all("script", type="application/ld+json"):
         raw = (el.string or "").strip()
         if not raw:
             continue
         try:
-            r = _walk_jsonld(json.loads(raw))
+            r = _walk_jsonld(json.loads(raw), color, size)
             if r:
                 return r
         except json.JSONDecodeError:
             m = re.search(r"\{[\s\S]*\}", raw)
             if m:
                 try:
-                    r = _walk_jsonld(json.loads(m.group(0)))
+                    r = _walk_jsonld(json.loads(m.group(0)), color, size)
                     if r:
                         return r
                 except json.JSONDecodeError:
@@ -315,9 +371,9 @@ def _to_result(data: dict, strategy: str) -> ParseResult:
     )
 
 
-def _try_structured(html: str) -> tuple[dict | None, str | None]:
+def _try_structured(html: str, color: str | None, size: str | None) -> tuple[dict | None, str | None]:
     soup = BeautifulSoup(html, "html.parser")
-    jl = extract_json_ld(soup)
+    jl = extract_json_ld(soup, color, size)
     og = extract_og_meta(soup)
     if jl:
         return {**(og or {}), **jl}, "json_ld"
@@ -326,7 +382,13 @@ def _try_structured(html: str) -> tuple[dict | None, str | None]:
     return None, None
 
 
-def parse(url: str, stored_selectors: dict | None, needs_js: bool = False) -> PipelineOutput | None:
+def parse(
+    url: str,
+    stored_selectors: dict | None,
+    needs_js: bool = False,
+    color: str | None = None,
+    size: str | None = None,
+) -> PipelineOutput | None:
     """Returns (ParseResult, strategy, needs_js) or None on failure."""
     cached_strategy: str | None = None
     if isinstance(stored_selectors, dict):
@@ -353,7 +415,7 @@ def parse(url: str, stored_selectors: dict | None, needs_js: bool = False) -> Pi
 
     def try_extract(current_html: str) -> bool:
         nonlocal data, strategy
-        d, s = _try_structured(current_html)
+        d, s = _try_structured(current_html, color, size)
         if d:
             data, strategy = d, s
             return True

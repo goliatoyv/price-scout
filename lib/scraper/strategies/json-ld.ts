@@ -1,6 +1,11 @@
 import * as cheerio from 'cheerio'
 import type { ProductData } from '../types'
 
+export interface VariantFilter {
+  color?: string | null
+  size?:  string | null
+}
+
 function toNumber(v: unknown): number | null {
   if (v == null) return null
   if (typeof v === 'number') return Number.isFinite(v) ? v : null
@@ -62,11 +67,84 @@ function fromProduct(node: any): Partial<ProductData> | null {
   }
 }
 
-function walk(node: any): Partial<ProductData> | null {
+// ─── Variant matching ────────────────────────────────────────────────────────
+
+function normalize(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, ' ').trim()
+}
+
+// Schema.org variants put colour/size in various places. Pull them all into
+// a single searchable haystack per variant.
+function variantText(v: any): string {
+  if (!v || typeof v !== 'object') return ''
+  const parts: string[] = []
+  for (const k of ['color', 'colour', 'size', 'name', 'description', 'sku', 'mpn', 'gtin']) {
+    if (typeof v[k] === 'string') parts.push(v[k])
+  }
+  // additionalProperty / additionalType — often: [{name:"Color", value:"Grey Matter"}]
+  const ap = v.additionalProperty
+  if (Array.isArray(ap)) {
+    for (const p of ap) {
+      if (p && typeof p === 'object') {
+        const name  = typeof p.name  === 'string' ? p.name  : ''
+        const value = typeof p.value === 'string' ? p.value : ''
+        parts.push(`${name}: ${value}`)
+      }
+    }
+  }
+  return normalize(parts.join(' | '))
+}
+
+function variantMatchesFilter(v: any, filter: VariantFilter): boolean {
+  const text = variantText(v)
+  if (filter.color) {
+    if (!text.includes(normalize(filter.color))) return false
+  }
+  if (filter.size) {
+    if (!text.includes(normalize(filter.size))) return false
+  }
+  return true
+}
+
+function priceOf(node: any): number | null {
+  const offers = Array.isArray(node.offers) ? node.offers[0] : node.offers
+  if (!offers) return null
+  return toNumber(offers.price ?? offers.lowPrice)
+}
+
+function pickVariant(group: any, filter: VariantFilter): any | null {
+  const variants = group.hasVariant
+  if (!Array.isArray(variants) || variants.length === 0) return null
+
+  const hasFilter = !!(filter.color || filter.size)
+
+  if (hasFilter) {
+    // Find a variant matching ALL specified filter fields. Prefer exact/contains
+    // match; if multiple match, prefer the cheapest one.
+    const matches = variants.filter(v => variantMatchesFilter(v, filter))
+    if (matches.length > 0) {
+      matches.sort((a, b) => (priceOf(a) ?? Infinity) - (priceOf(b) ?? Infinity))
+      return matches[0]
+    }
+  }
+
+  // No filter, or nothing matched → fall back to the cheapest variant with a
+  // price (better default than the first listed).
+  const priced = variants
+    .map(v => ({ v, p: priceOf(v) }))
+    .filter(x => x.p != null)
+  if (priced.length === 0) return variants[0]
+  priced.sort((a, b) => (a.p as number) - (b.p as number))
+  return priced[0].v
+}
+
+// ─── Recursive JSON-LD walker ────────────────────────────────────────────────
+
+function walk(node: any, filter: VariantFilter): Partial<ProductData> | null {
   if (!node || typeof node !== 'object') return null
   if (Array.isArray(node)) {
     for (const item of node) {
-      const r = walk(item)
+      const r = walk(item, filter)
       if (r) return r
     }
     return null
@@ -77,26 +155,26 @@ function walk(node: any): Partial<ProductData> | null {
     const r = fromProduct(node)
     if (r) return r
   }
-  if (types.includes('ProductGroup') && Array.isArray(node.hasVariant)) {
-    // Nike pattern — promote first variant's offer, keep group's name/image.
-    for (const v of node.hasVariant) {
+  if (types.includes('ProductGroup')) {
+    const chosen = pickVariant(node, filter)
+    if (chosen) {
       const merged = {
-        ...v,
-        name: node.name ?? v?.name,
-        image: node.image ?? v?.image,
+        ...chosen,
+        name:  node.name  ?? chosen.name,
+        image: node.image ?? chosen.image,
       }
       const r = fromProduct(merged)
       if (r) return r
     }
   }
   if (node['@graph']) {
-    const r = walk(node['@graph'])
+    const r = walk(node['@graph'], filter)
     if (r) return r
   }
   return null
 }
 
-export function extractJsonLd(html: string): Partial<ProductData> | null {
+export function extractJsonLd(html: string, filter: VariantFilter = {}): Partial<ProductData> | null {
   const $ = cheerio.load(html)
   const blocks = $('script[type="application/ld+json"]').toArray()
   for (const el of blocks) {
@@ -104,14 +182,13 @@ export function extractJsonLd(html: string): Partial<ProductData> | null {
     if (!raw) continue
     try {
       const parsed = JSON.parse(raw)
-      const r = walk(parsed)
+      const r = walk(parsed, filter)
       if (r) return r
     } catch {
-      // Some sites concatenate multiple JSON objects in one script.
       const match = raw.match(/\{[\s\S]*\}/)
       if (match) {
         try {
-          const r = walk(JSON.parse(match[0]))
+          const r = walk(JSON.parse(match[0]), filter)
           if (r) return r
         } catch { /* skip */ }
       }

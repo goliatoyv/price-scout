@@ -20,6 +20,7 @@ export async function POST(req: Request) {
       url: body.url,
       target_price: body.target_price || null,
       size: body.size || null,
+      color: body.color || null,
       notes: body.notes || null,
       priority: body.priority || 1,
       site_domain: domain,

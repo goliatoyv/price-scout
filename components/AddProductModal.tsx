@@ -11,10 +11,12 @@ export function AddProductModal({ onAdded }: Props) {
   const [phase, setPhase]   = useState<Phase>('idle')
   const [url, setUrl]       = useState('')
   const [target, setTarget] = useState('')
+  const [color, setColor]   = useState('')
+  const [size, setSize]     = useState('')
   const [error, setError]   = useState('')
 
   function close() {
-    setOpen(false); setUrl(''); setTarget(''); setError(''); setPhase('idle')
+    setOpen(false); setUrl(''); setTarget(''); setColor(''); setSize(''); setError(''); setPhase('idle')
   }
 
   async function submit(e: React.FormEvent) {
@@ -25,7 +27,12 @@ export function AddProductModal({ onAdded }: Props) {
       const r = await fetch('/api/products', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, target_price: target ? +target : null }),
+        body: JSON.stringify({
+          url,
+          target_price: target ? +target : null,
+          color: color.trim() || null,
+          size:  size.trim()  || null,
+        }),
       })
       const product = await r.json()
       if (!r.ok || product.error) throw new Error(product.error || 'Помилка збереження')
@@ -79,6 +86,32 @@ export function AddProductModal({ onAdded }: Props) {
                     onChange={e => setUrl(e.target.value)}
                     placeholder="https://..."
                     className="w-full pl-9 pr-3 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              {/* Variant: color + size */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+                    Колір <span className="normal-case text-gray-400 font-normal">(опц.)</span>
+                  </label>
+                  <input
+                    value={color}
+                    onChange={e => setColor(e.target.value)}
+                    placeholder="Grey Matter"
+                    className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+                    Розмір <span className="normal-case text-gray-400 font-normal">(опц.)</span>
+                  </label>
+                  <input
+                    value={size}
+                    onChange={e => setSize(e.target.value)}
+                    placeholder="M8 / EU42"
+                    className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
               </div>

@@ -1,5 +1,5 @@
 import { fetchPage, canRender, type FetchMode } from './fetch'
-import { extractJsonLd } from './strategies/json-ld'
+import { extractJsonLd, type VariantFilter } from './strategies/json-ld'
 import { extractOgMeta } from './strategies/og-meta'
 import { extractWithLlm } from './strategies/llm'
 import { domainOf, loadStrategy, saveStrategy } from './cache'
@@ -13,8 +13,8 @@ export interface PipelineOutcome {
   siteLearned: boolean
 }
 
-function mergeStructured(html: string): { data: Partial<ProductData> | null; strategy: Strategy | null } {
-  const jl = extractJsonLd(html)
+function mergeStructured(html: string, filter: VariantFilter): { data: Partial<ProductData> | null; strategy: Strategy | null } {
+  const jl = extractJsonLd(html, filter)
   const og = extractOgMeta(html)
   if (jl?.price != null) return { data: { ...og, ...jl }, strategy: 'json_ld' }
   if (og?.price != null) return { data: og, strategy: 'og_meta' }
@@ -45,7 +45,7 @@ async function safeFetch(url: string, mode: FetchMode): Promise<string | null> {
  * Successful mode is persisted as site_parsers.{strategy, needs_js} so
  * future runs skip the cheaper-but-useless steps.
  */
-export async function runPipeline(url: string): Promise<PipelineOutcome> {
+export async function runPipeline(url: string, filter: VariantFilter = {}): Promise<PipelineOutcome> {
   const domain = domainOf(url)
   const saved  = await loadStrategy(domain)
   const hard   = isHardSite(url)
@@ -73,7 +73,7 @@ export async function runPipeline(url: string): Promise<PipelineOutcome> {
 
   // Helper: try structured extract; if it fails AND cache says 'llm', try LLM.
   const tryExtract = async (currentHtml: string): Promise<boolean> => {
-    const r = mergeStructured(currentHtml)
+    const r = mergeStructured(currentHtml, filter)
     if (r.data && r.strategy) {
       data = r.data; strategy = r.strategy
       return true

@@ -8,6 +8,7 @@ export interface Product {
   target_price: number | null
   size: string | null
   color: string | null
+  group_key: string | null
   status: ProductStatus
   priority: number
   image_url: string | null

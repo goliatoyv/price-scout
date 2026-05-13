@@ -157,7 +157,38 @@ export function WatchList({ products, onUpdate, quickFilter, onQuickFilter }: Pr
                 {products.length === 0 ? 'Список порожній. Додайте перший товар!' : 'Нічого не знайдено.'}
               </td></tr>
             ) : (
-              filtered.map(p => <ProductRow key={p.id} product={p} onUpdate={onUpdate} />)
+              (() => {
+                const rendered = new Set<string>()
+                const rows: React.ReactNode[] = []
+                for (const p of filtered) {
+                  if (p.group_key) {
+                    if (rendered.has(p.group_key)) continue
+                    const groupRows = filtered.filter(x => x.group_key === p.group_key)
+                    if (groupRows.length > 1) {
+                      rendered.add(p.group_key)
+                      const groupName = groupRows.find(r => r.name)?.name ?? 'Група'
+                      const groupDomain = groupRows[0].site_domain ?? ''
+                      rows.push(
+                        <tr key={`g-${p.group_key}`} className="bg-gray-50 border-t border-b border-gray-200">
+                          <td colSpan={9} className="px-4 py-2 text-xs font-semibold text-gray-700">
+                            <span className="text-gray-400 mr-2">▾</span>
+                            {groupName}
+                            <span className="ml-2 text-gray-400 font-normal">
+                              · {groupRows.length} варіант{groupRows.length === 1 ? '' : 'и'} · {groupDomain}
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                      for (const r of groupRows) {
+                        rows.push(<ProductRow key={r.id} product={r} onUpdate={onUpdate} />)
+                      }
+                      continue
+                    }
+                  }
+                  rows.push(<ProductRow key={p.id} product={p} onUpdate={onUpdate} />)
+                }
+                return rows
+              })()
             )}
           </tbody>
         </table>

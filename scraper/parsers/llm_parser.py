@@ -377,11 +377,35 @@ def parse(url: str, stored_selectors: dict | None, needs_js: bool = False) -> Pi
                 data = og
                 strategy = "og_meta"
 
-    # 4. LLM fallback (skip if cache already routed us there).
+    # 4. LLM fallback on the (possibly direct) HTML — skip if cache routed us
+    #    here already.
     if data is None and cached_strategy != "llm":
         llm = extract_with_llm(html, url)
         if llm:
             data, strategy = llm, "llm"
+
+    # 5. Last-resort render retry: if everything failed on direct HTML AND we
+    #    haven't rendered yet, try ScraperAPI render once. On success the
+    #    domain is auto-learned as needs_js=true so future runs go straight to
+    #    render (skipping the now-known-useless direct fetch).
+    if data is None and not used_js and _can_render():
+        rendered_html = _fetch(url, render=True)
+        if rendered_html:
+            used_js = True
+            html = rendered_html
+            soup = BeautifulSoup(html, "html.parser")
+            jl = extract_json_ld(soup)
+            og = extract_og_meta(soup)
+            if jl:
+                data = {**(og or {}), **jl}
+                strategy = "json_ld"
+            elif og:
+                data = og
+                strategy = "og_meta"
+            else:
+                llm2 = extract_with_llm(html, url)
+                if llm2:
+                    data, strategy = llm2, "llm"
 
     if data is None or strategy is None or data.get("price") is None:
         return None

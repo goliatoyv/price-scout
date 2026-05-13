@@ -68,10 +68,29 @@ export async function runPipeline(url: string): Promise<PipelineOutcome> {
     if (r.data && r.strategy) { data = r.data; strategy = r.strategy }
   }
 
-  // 4. Final fallback → LLM (skip if cache already routed us here).
+  // 4. LLM fallback on the (possibly direct) HTML — skip if cache routed us
+  //    here already.
   if (!data && saved?.strategy !== 'llm') {
     const r = await extractWithLlm(html, url)
     if (r) { data = r; strategy = 'llm' }
+  }
+
+  // 5. Last-resort render retry: if everything failed and we have not yet
+  //    rendered, try ScraperAPI once. On success the domain is auto-learned
+  //    as needs_js=true so future runs go straight to render.
+  if (!data && !usedJs && canRender()) {
+    const rerender = await fetchPage(url, true)
+    if (rerender.html && rerender.html.length >= 500) {
+      html   = rerender.html
+      usedJs = true
+      const r = mergeStructured(html)
+      if (r.data && r.strategy) {
+        data = r.data; strategy = r.strategy
+      } else {
+        const llm = await extractWithLlm(html, url)
+        if (llm) { data = llm; strategy = 'llm' }
+      }
+    }
   }
 
   if (!data || data.price == null || !strategy) {

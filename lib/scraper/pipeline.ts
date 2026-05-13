@@ -61,11 +61,15 @@ export async function runPipeline(url: string): Promise<PipelineOutcome> {
   // 3. No price → JS render retry only for hard sites (avoid burning credits
   //    on unknown domains where render likely won't help either).
   if (!data && !usedJs && hard && canRender()) {
-    const rerender = await fetchPage(url, true)
-    html    = rerender.html
-    usedJs  = true
-    const r = mergeStructured(html)
-    if (r.data && r.strategy) { data = r.data; strategy = r.strategy }
+    try {
+      const rerender = await fetchPage(url, true)
+      html    = rerender.html
+      usedJs  = true
+      const r = mergeStructured(html)
+      if (r.data && r.strategy) { data = r.data; strategy = r.strategy }
+    } catch (e) {
+      console.error('[scrape] hard-site render failed', e)
+    }
   }
 
   // 4. LLM fallback on the (possibly direct) HTML — skip if cache routed us
@@ -79,17 +83,21 @@ export async function runPipeline(url: string): Promise<PipelineOutcome> {
   //    rendered, try ScraperAPI once. On success the domain is auto-learned
   //    as needs_js=true so future runs go straight to render.
   if (!data && !usedJs && canRender()) {
-    const rerender = await fetchPage(url, true)
-    if (rerender.html && rerender.html.length >= 500) {
-      html   = rerender.html
-      usedJs = true
-      const r = mergeStructured(html)
-      if (r.data && r.strategy) {
-        data = r.data; strategy = r.strategy
-      } else {
-        const llm = await extractWithLlm(html, url)
-        if (llm) { data = llm; strategy = 'llm' }
+    try {
+      const rerender = await fetchPage(url, true)
+      if (rerender.html && rerender.html.length >= 500) {
+        html   = rerender.html
+        usedJs = true
+        const r = mergeStructured(html)
+        if (r.data && r.strategy) {
+          data = r.data; strategy = r.strategy
+        } else {
+          const llm = await extractWithLlm(html, url)
+          if (llm) { data = llm; strategy = 'llm' }
+        }
       }
+    } catch (e) {
+      console.error('[scrape] last-resort render failed', e)
     }
   }
 

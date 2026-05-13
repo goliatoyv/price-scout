@@ -48,16 +48,21 @@ Return ONLY one JSON object, no markdown, no commentary:
 HTML:
 ${cleaned}`
 
-  const msg = await c.messages.create({
-    model:      MODEL,
-    max_tokens: 512,
-    messages:   [{ role: 'user', content: prompt }],
-  })
-
-  const text = msg.content
-    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-    .map(b => b.text)
-    .join('')
+  let text = ''
+  try {
+    const msg = await c.messages.create({
+      model:      MODEL,
+      max_tokens: 512,
+      messages:   [{ role: 'user', content: prompt }],
+    })
+    text = msg.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map(b => b.text)
+      .join('')
+  } catch (e) {
+    console.error('[scrape] LLM extract failed', e)
+    return null
+  }
 
   const m = text.match(/\{[\s\S]*\}/)
   if (!m) return null

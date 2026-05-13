@@ -36,7 +36,10 @@ def get_site_parser(domain):
     return rows[0] if rows else None
 
 def upsert_site_parser(domain, selectors, needs_js=False):
+    # on_conflict=domain tells PostgREST to UPSERT on the unique domain column
+    # instead of treating this as a plain INSERT (which 409s on duplicates).
     httpx.post(f"{SUPABASE_URL}/rest/v1/site_parsers",
+               params={"on_conflict": "domain"},
                json={"domain": domain, "selectors": selectors, "needs_js": needs_js,
                      "fail_streak": 0, "success_rate": 1.0},
                headers={**HEADERS, "Prefer": "resolution=merge-duplicates"},

@@ -1,8 +1,9 @@
-import { fetchPage } from './fetch'
+import { fetchPage, canRender } from './fetch'
 import { extractJsonLd } from './strategies/json-ld'
 import { extractOgMeta } from './strategies/og-meta'
 import { extractWithLlm } from './strategies/llm'
 import { domainOf, loadStrategy, saveStrategy } from './cache'
+import { isHardSite } from './hard-sites'
 import type { ProductData, Strategy } from './types'
 
 export interface PipelineOutcome {
@@ -23,9 +24,12 @@ function mergeStructured(html: string): { data: Partial<ProductData> | null; str
 export async function runPipeline(url: string): Promise<PipelineOutcome> {
   const domain = domainOf(url)
   const saved  = await loadStrategy(domain)
+  const hard   = isHardSite(url)
 
-  // Initial fetch — honour cached needs_js so SPAs render on the first hop.
-  let outcome = await fetchPage(url, saved?.needs_js ?? false)
+  // Render only when we know it's needed: cached needs_js OR known-hard site.
+  const initialRender = ((saved?.needs_js ?? false) || hard) && canRender()
+
+  let outcome = await fetchPage(url, initialRender)
   let html    = outcome.html
   let usedJs  = outcome.rendered
 
@@ -54,8 +58,9 @@ export async function runPipeline(url: string): Promise<PipelineOutcome> {
     if (r.data && r.strategy) { data = r.data; strategy = r.strategy }
   }
 
-  // 3. No price → JS render retry if not done yet.
-  if (!data && !usedJs && process.env.SCRAPER_API_KEY) {
+  // 3. No price → JS render retry only for hard sites (avoid burning credits
+  //    on unknown domains where render likely won't help either).
+  if (!data && !usedJs && hard && canRender()) {
     const rerender = await fetchPage(url, true)
     html    = rerender.html
     usedJs  = true

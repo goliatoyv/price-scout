@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import * as cheerio from 'cheerio'
 import Anthropic from '@anthropic-ai/sdk'
-import { fetchPage } from '@/lib/scraper/fetch'
+import { fetchPage, canRender } from '@/lib/scraper/fetch'
+import { isHardSite } from '@/lib/scraper/hard-sites'
 
 export const dynamic     = 'force-dynamic'
 export const maxDuration = 60
@@ -68,11 +69,14 @@ export async function POST(req: Request) {
   }
   if (!url) return NextResponse.json({ error: 'URL обовʼязковий' }, { status: 400 })
 
-  // Category pages are almost always client-rendered SPAs (Adidas, Nike, Zalando, etc.).
-  // Force JS rendering when ScraperAPI key is available; otherwise do best-effort direct fetch.
+  // Try direct fetch first; only escalate to ScraperAPI render for known-hard
+  // SPA hosts. If a regular site yields no candidates we also do one render
+  // retry (rare; helps when a server-rendered shop is briefly behind a
+  // bot wall) — but only for hard hosts so unknown domains don't burn credits.
+  const hard = isHardSite(url)
   let html: string
   try {
-    const first = await fetchPage(url, !!process.env.SCRAPER_API_KEY)
+    const first = await fetchPage(url, hard && canRender())
     html = first.html
     if (!html || html.length < 500) {
       return NextResponse.json({ error: 'Сторінка повернула порожню відповідь' }, { status: 502 })
@@ -82,7 +86,19 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Не вдалося завантажити сторінку' }, { status: 502 })
   }
 
-  const candidates = extractCandidates(html, url)
+  let candidates = extractCandidates(html, url)
+
+  if (candidates.length === 0 && hard && canRender()) {
+    // Hard site, but we somehow had it cached/unrendered — try one render pass.
+    try {
+      const rerender = await fetchPage(url, true)
+      if (rerender.html && rerender.html.length >= 500) {
+        html = rerender.html
+        candidates = extractCandidates(html, url)
+      }
+    } catch { /* ignore */ }
+  }
+
   if (candidates.length === 0) {
     return NextResponse.json({ products: [], total: 0 })
   }

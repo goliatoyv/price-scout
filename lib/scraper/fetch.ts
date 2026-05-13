@@ -32,15 +32,14 @@ async function rawFetch(url: string, render: boolean): Promise<FetchOutcome> {
 }
 
 /**
- * Fetch with auto-retry on JS render when the first response looks blocked
- * (status 403 or HTML shorter than 500 bytes). The retry only happens if a
- * ScraperAPI key is available — otherwise rendering is impossible.
+ * Single fetch with the requested render mode. No automatic upgrade — the
+ * caller decides whether to retry. This keeps ScraperAPI usage explicit so
+ * we don't burn render credits on every blocked page.
  */
 export async function fetchPage(url: string, render = false): Promise<FetchOutcome> {
-  const first = await rawFetch(url, render)
-  const blocked = first.status === 403 || first.html.length < 500
-  if (blocked && !render && process.env.SCRAPER_API_KEY) {
-    return rawFetch(url, true)
-  }
-  return first
+  return rawFetch(url, render)
+}
+
+export function canRender(): boolean {
+  return !!process.env.SCRAPER_API_KEY
 }

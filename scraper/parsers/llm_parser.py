@@ -29,6 +29,20 @@ log = logging.getLogger(__name__)
 LLM_MODEL    = "claude-haiku-4-5-20251001"
 LLM_MAX_HTML = 12_000
 
+# Domains known to ship empty SPA shells — JSON-LD/OG never present in the
+# initial HTML, so we MUST render via ScraperAPI to extract anything. Match
+# is by suffix on the registrable hostname, so adidas.de etc. also match.
+HARD_SITES = ("adidas.com", "adidas.de", "adidas.co.uk", "zalando.de", "zalando.com")
+
+def _is_hard_site(url: str) -> bool:
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").lower().lstrip(".")
+        host = host.removeprefix("www.")
+        return any(host == d or host.endswith("." + d) for d in HARD_SITES)
+    except Exception:
+        return False
+
 _client: anthropic.Anthropic | None = None
 
 
@@ -41,23 +55,23 @@ def _llm_client() -> anthropic.Anthropic | None:
     return _client
 
 
-# ─── Fetch with auto-retry on JS render ──────────────────────────────────────
+# ─── Fetch ───────────────────────────────────────────────────────────────────
 
 def _fetch(url: str, render: bool) -> str | None:
+    """Single fetch with the requested render mode. No automatic upgrade to
+    ScraperAPI — the caller decides whether to retry."""
     try:
         html = fetch_html(url, render=render)
     except Exception as e:
         log.warning("fetch failed (render=%s) for %s: %s", render, url, e)
         return None
     if not html or len(html) < 500:
-        if not render and os.environ.get("SCRAPER_API_KEY"):
-            try:
-                return fetch_html(url, render=True)
-            except Exception as e:
-                log.warning("render-retry fetch failed: %s", e)
-                return None
         return None
     return html
+
+
+def _can_render() -> bool:
+    return bool(os.environ.get("SCRAPER_API_KEY"))
 
 
 # ─── JSON-LD ─────────────────────────────────────────────────────────────────
@@ -306,10 +320,14 @@ def parse(url: str, stored_selectors: dict | None, needs_js: bool = False) -> Pi
         if s in ("json_ld", "og_meta", "llm"):
             cached_strategy = s
 
-    html = _fetch(url, render=needs_js)
+    # Decide whether to render: cached needs_js, or known-hard site.
+    hard = _is_hard_site(url)
+    initial_render = (needs_js or hard) and _can_render()
+
+    html = _fetch(url, render=initial_render)
     if html is None:
         return None
-    used_js = needs_js
+    used_js = initial_render
 
     soup = BeautifulSoup(html, "html.parser")
     data: dict | None = None
@@ -341,8 +359,10 @@ def parse(url: str, stored_selectors: dict | None, needs_js: bool = False) -> Pi
             data = og
             strategy = "og_meta"
 
-    # 3. Render retry if we haven't tried it.
-    if data is None and not used_js and os.environ.get("SCRAPER_API_KEY"):
+    # 3. Render retry — only for hard sites / cached needs_js, NOT for unknown
+    #    domains. This is the core of "option C": spend ScraperAPI credits
+    #    only where we know they are needed.
+    if data is None and not used_js and hard and _can_render():
         rendered_html = _fetch(url, render=True)
         if rendered_html:
             html = rendered_html

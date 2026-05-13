@@ -81,7 +81,7 @@ export function AddProductModal({ onAdded }: Props) {
       } else {
         setGroupName(d.groupName)
         setVariants(priced)
-        setPicked(new Set(priced.map((_, i) => i)))  // default: all selected
+        setPicked(new Set())  // default: nothing selected — user picks intentionally
         setStep('pick')
       }
     } catch (e: unknown) {
@@ -248,8 +248,16 @@ export function AddProductModal({ onAdded }: Props) {
                   <ChevronLeft size={14} /> Назад
                 </button>
 
-                <div className="text-xs text-gray-500">
-                  Знайдено <strong>{variants.length}</strong> варіантів. Виберіть, які додати у Watch List.
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-gray-500">
+                    Знайдено <strong>{variants.length}</strong> варіантів. Виберіть, які додати.
+                  </div>
+                  <div className="flex items-center gap-3 text-xs">
+                    <button onClick={() => setPicked(new Set(variants.map((_, i) => i)))}
+                            className="text-blue-600 hover:underline">Виділити все</button>
+                    <button onClick={() => setPicked(new Set())}
+                            className="text-gray-500 hover:underline">Зняти</button>
+                  </div>
                 </div>
 
                 <div className="max-h-80 overflow-y-auto rounded-xl border border-gray-100 divide-y divide-gray-100">

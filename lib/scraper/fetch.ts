@@ -1,6 +1,9 @@
 import { assertSafeUrl } from './safe-url'
 
-const TIMEOUT_MS = 40_000
+// Direct fetches are fast; ScraperAPI render of heavy SPAs (Nike Launch,
+// Adidas product pages) can run 20-50s. Vercel functions cap at 60s.
+const TIMEOUT_DIRECT_MS = 15_000
+const TIMEOUT_RENDER_MS = 55_000
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36'
 
 export interface FetchOutcome {
@@ -25,7 +28,7 @@ async function rawFetch(url: string, render: boolean): Promise<FetchOutcome> {
 
   const res = await fetch(target, {
     headers: { 'User-Agent': UA },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: AbortSignal.timeout(render ? TIMEOUT_RENDER_MS : TIMEOUT_DIRECT_MS),
   })
   const html = await res.text()
   return { html, status: res.status, rendered: render }
